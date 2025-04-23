@@ -15,7 +15,7 @@ import { QueryInvoiceDto } from './dto/query-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { InvoiceService } from './invoice.service';
 
-@Controller()
+@Controller("invoice")
 export class InvoiceController {
   private readonly logger = new Logger(InvoiceController.name);
 

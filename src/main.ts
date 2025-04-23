@@ -22,8 +22,8 @@ async function bootstrap() {
     }),
   );
 
-  // Set global prefix
-  app.setGlobalPrefix('api');
+  // // Set global prefix
+  // app.setGlobalPrefix('api');
 
   // Get configuration
   const configService = app.get(ConfigService);
