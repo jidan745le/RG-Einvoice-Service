@@ -22,7 +22,7 @@ export class InvoiceService {
     private readonly invoiceDetailRepository: Repository<InvoiceDetail>,
     private readonly baiwangService: BaiwangService,
     private readonly epicorService: EpicorService,
-  ) {}
+  ) { }
 
   /**
    * Create a new invoice
@@ -31,15 +31,15 @@ export class InvoiceService {
    */
   async create(createInvoiceDto: CreateInvoiceDto): Promise<Invoice> {
     const { details, ...invoiceData } = createInvoiceDto;
-    
+
     // Create invoice
     const invoice = this.invoiceRepository.create({
       ...invoiceData,
       status: 'PENDING',
     });
-    
+
     const savedInvoice = await this.invoiceRepository.save(invoice);
-    
+
     // Create invoice details if provided
     if (details && details.length > 0) {
       const invoiceDetails = details.map(detail => this.invoiceDetailRepository.create({
@@ -47,10 +47,10 @@ export class InvoiceService {
         invoiceId: savedInvoice.id,
         erpInvoiceId: savedInvoice.erpInvoiceId,
       }));
-      
+
       await this.invoiceDetailRepository.save(invoiceDetails);
     }
-    
+
     return savedInvoice;
   }
 
@@ -59,95 +59,95 @@ export class InvoiceService {
    * @param queryDto Query parameters
    * @returns Paginated list of invoices with details and status totals
    */
-  async findAll(queryDto: QueryInvoiceDto): Promise<{ 
-    items: Invoice[]; 
-    total: number; 
-    page: number; 
+  async findAll(queryDto: QueryInvoiceDto): Promise<{
+    items: Invoice[];
+    total: number;
+    page: number;
     limit: number;
-    totals: { 
-      PENDING: number; 
-      SUBMITTED: number; 
+    totals: {
+      PENDING: number;
+      SUBMITTED: number;
       ERROR: number;
       RED_NOTE: number;
       [key: string]: number; // 允许动态键名
     };
   }> {
     const { page = 1, limit = 10, ...filters } = queryDto;
-    
+
     // 构建主查询获取分页结果
     const queryBuilder = this.invoiceRepository.createQueryBuilder('invoice')
       .leftJoinAndSelect('invoice.invoiceDetails', 'invoiceDetails');
-    
+
     // 构建状态统计查询
     const statusQueryBuilder = this.invoiceRepository.createQueryBuilder('invoice')
       .select('invoice.status', 'status')
       .addSelect('COUNT(invoice.id)', 'count');
-    
+
     // 对两个查询应用相同的过滤条件
     if (filters.erpInvoiceId) {
       const erpFilter = 'CAST(invoice.erpInvoiceId AS CHAR) LIKE :erpInvoiceId';
       queryBuilder.andWhere(erpFilter, { erpInvoiceId: `%${filters.erpInvoiceId}%` });
       statusQueryBuilder.andWhere(erpFilter, { erpInvoiceId: `%${filters.erpInvoiceId}%` });
     }
-    
+
     if (filters.customerName) {
       const customerFilter = 'invoice.customerName LIKE :customerName';
       queryBuilder.andWhere(customerFilter, { customerName: `%${filters.customerName}%` });
       statusQueryBuilder.andWhere(customerFilter, { customerName: `%${filters.customerName}%` });
     }
-    
+
     if (filters.status) {
       const statusFilter = 'invoice.status = :status';
       queryBuilder.andWhere(statusFilter, { status: filters.status });
       // statusQueryBuilder.andWhere(statusFilter, { status: filters.status });
     }
-    
+
     if (filters.eInvoiceId) {
       const eInvoiceFilter = 'invoice.eInvoiceId = :eInvoiceId';
       queryBuilder.andWhere(eInvoiceFilter, { eInvoiceId: filters.eInvoiceId });
       statusQueryBuilder.andWhere(eInvoiceFilter, { eInvoiceId: filters.eInvoiceId });
     }
-    
+
     if (filters.startDate) {
       const startDateFilter = 'invoice.postDate >= :startDate';
       queryBuilder.andWhere(startDateFilter, { startDate: filters.startDate });
       statusQueryBuilder.andWhere(startDateFilter, { startDate: filters.startDate });
     }
-    
+
     if (filters.endDate) {
       const endDateFilter = 'invoice.postDate <= :endDate';
       queryBuilder.andWhere(endDateFilter, { endDate: filters.endDate });
       statusQueryBuilder.andWhere(endDateFilter, { endDate: filters.endDate });
     }
-    
+
     if (filters.fapiaoType) {
       const fapiaoFilter = 'invoice.fapiaoType = :fapiaoType';
       queryBuilder.andWhere(fapiaoFilter, { fapiaoType: filters.fapiaoType });
       statusQueryBuilder.andWhere(fapiaoFilter, { fapiaoType: filters.fapiaoType });
     }
-    
+
     if (filters.submittedBy) {
       const submitterFilter = 'invoice.submittedBy = :submittedBy';
       queryBuilder.andWhere(submitterFilter, { submittedBy: filters.submittedBy });
       statusQueryBuilder.andWhere(submitterFilter, { submittedBy: filters.submittedBy });
     }
-    
+
     // 计算总记录数
     const total = await queryBuilder.getCount();
-    
+
     // 添加分页和排序
     queryBuilder
       .skip((page - 1) * limit)
       .take(limit)
       .orderBy('invoice.createdAt', 'DESC');
-    
+
     // 执行分页查询获取列表项
     const items = await queryBuilder.getMany();
-    
+
     // 添加分组统计并执行查询
     statusQueryBuilder.groupBy('invoice.status');
     const statusCounts = await statusQueryBuilder.getRawMany();
-    
+
     // 创建状态计数对象并初始化所有状态为0
     const totals = {
       PENDING: 0,
@@ -156,13 +156,13 @@ export class InvoiceService {
       RED_NOTE: 0,
       TOTAL: 0,
     };
-    
+
     // 用查询结果填充状态计数
     statusCounts.forEach(item => {
       totals[item.status] = parseInt(item.count, 10);
     });
     totals.TOTAL = totals.PENDING + totals.SUBMITTED + totals.ERROR + totals.RED_NOTE;
-    
+
     return {
       items,
       total,
@@ -178,15 +178,15 @@ export class InvoiceService {
    * @returns Invoice with details
    */
   async findOne(id: number): Promise<Invoice> {
-    const invoice = await this.invoiceRepository.findOne({ 
-      where: {erpInvoiceId: id },
+    const invoice = await this.invoiceRepository.findOne({
+      where: { erpInvoiceId: id },
       relations: ['invoiceDetails']
     });
-    
+
     if (!invoice) {
       throw new NotFoundException(`Invoice with ID ${id} not found`);
     }
-    
+
     return invoice;
   }
 
@@ -196,15 +196,15 @@ export class InvoiceService {
    * @returns Invoice with details
    */
   async findByErpInvoiceId(erpInvoiceId: number): Promise<Invoice> {
-    const invoice = await this.invoiceRepository.findOne({ 
+    const invoice = await this.invoiceRepository.findOne({
       where: { erpInvoiceId },
       relations: ['invoiceDetails']
     });
-    
+
     if (!invoice) {
       throw new NotFoundException(`Invoice with ERP ID ${erpInvoiceId} not found`);
     }
-    
+
     return invoice;
   }
 
@@ -216,27 +216,27 @@ export class InvoiceService {
    */
   async update(id: number, updateInvoiceDto: UpdateInvoiceDto): Promise<Invoice> {
     const invoice = await this.findOne(id);
-    
+
     const { details, ...invoiceData } = updateInvoiceDto;
-    
+
     // Update invoice
     await this.invoiceRepository.update(id, invoiceData);
-    
+
     // Update details if provided
     if (details && details.length > 0) {
       // Delete existing details
       await this.invoiceDetailRepository.delete({ invoiceId: id });
-      
+
       // Create new details
       const invoiceDetails = details.map(detail => this.invoiceDetailRepository.create({
         ...detail,
         invoiceId: id,
         erpInvoiceId: invoice.erpInvoiceId,
       }));
-      
+
       await this.invoiceDetailRepository.save(invoiceDetails);
     }
-    
+
     return this.findOne(id);
   }
 
@@ -250,17 +250,21 @@ export class InvoiceService {
     try {
       // Get invoice and details
       const invoice = await this.findOne(id);
-      const details = await this.invoiceDetailRepository.find({ where: { invoice: {
-        erpInvoiceId: id
-      } } });
-      
+      const details = await this.invoiceDetailRepository.find({
+        where: {
+          invoice: {
+            erpInvoiceId: id
+          }
+        }
+      });
+
       if (!details.length) {
         throw new Error('Cannot submit invoice without details');
       }
-      
+
       // Generate order number using UUID (shortened)
       const orderNo = `ORD-${uuidv4().substring(0, 8)}-${Date.now()}`;
-      
+
       // Map invoice details to Baiwang format
       const invoiceDetailList = details.map(detail => ({
         goodsTaxRate: String((detail.taxPercent ? parseFloat(String(detail.taxPercent)) / 100 : 0.13).toFixed(2)),
@@ -270,11 +274,12 @@ export class InvoiceService {
         goodsUnit: detail.salesUm || '',
         goodsName: detail.lineDescription || 'Product',
       }));
-      
+
       // Create Baiwang request
       const baiwangRequest = {
         buyerTelephone: '',
         priceTaxMark: '0',
+        callBackUrl: 'http://8.219.189.158:81/e-invoice/api/invoice/callback',
         invoiceDetailList,
         sellerAddress: 'Environment issue immediately',
         buyerAddress: 'Test address',
@@ -288,16 +293,16 @@ export class InvoiceService {
         sellerBankName: 'Test Bank',
         remarks: invoice.invoiceComment || 'Invoice',
       };
-      
+
       // Submit to Baiwang
       const result = await this.baiwangService.submitInvoice(baiwangRequest);
-      
+
       // Update invoice status and submitter
       await this.invoiceRepository.update(id, {
         status: 'PENDING',
         submittedBy,
       });
-      
+
       return {
         success: true,
         message: 'Invoice submitted successfully',
@@ -305,13 +310,13 @@ export class InvoiceService {
       };
     } catch (error) {
       this.logger.error(`Error submitting invoice ${id}: ${error.message}`, error.stack);
-      
+
       // Update invoice status to ERROR
       await this.invoiceRepository.update(id, {
         status: 'ERROR',
         comment: `Error: ${error.message}`,
       });
-      
+
       throw error;
     }
   }
@@ -323,10 +328,10 @@ export class InvoiceService {
    */
   async processCallback(callbackData: any): Promise<any> {
     this.logger.log(`Processing callback: ${JSON.stringify(callbackData)}`);
-    
+
     // For now, just log the data
     // In a real implementation, we would update the invoice status, e-invoice ID, PDF URL, etc.
-    
+
     return {
       success: true,
       message: 'Callback processed successfully',
@@ -341,39 +346,39 @@ export class InvoiceService {
   async syncFromEpicor(): Promise<any> {
     try {
       this.logger.log('Syncing invoices from Epicor');
-      
+
       // Get last sync date
       const lastInvoice = await this.invoiceRepository.findOne({
         where: {},
         order: { createdAt: 'DESC' },
       });
-      
+
       const lastSyncDate = lastInvoice?.createdAt || undefined;
-      
+
       // Sync invoices from Epicor
       const epicorResponse = await this.epicorService.syncInvoices(lastSyncDate);
-      
+
       // Group invoices by InvcDtl_InvoiceNum
       const groupedInvoices = this.groupInvoicesByNumber(epicorResponse.value);
-      
+
       // Process each invoice group
       const processedInvoices: { erpInvoiceId: number; status: string; error?: string }[] = [];
-      
+
       for (const [invoiceNum, invoiceDetails] of Object.entries(groupedInvoices)) {
         try {
           // Use the first item for header information
           const firstInvoice = invoiceDetails[0];
-          
+
           // Check if invoice already exists
           const existingInvoice = await this.invoiceRepository.findOne({
             where: { erpInvoiceId: firstInvoice.InvcHead_InvoiceNum },
           });
-          
+
           if (existingInvoice) {
             this.logger.log(`Invoice ${firstInvoice.InvcHead_InvoiceNum} already exists. Skipping.`);
             continue;
           }
-          
+
           // Create new invoice
           const newInvoice = this.invoiceRepository.create({
             erpInvoiceId: firstInvoice.InvcHead_InvoiceNum,
@@ -386,7 +391,7 @@ export class InvoiceService {
             poNumber: firstInvoice.OrderHed_PONum,
             status: 'PENDING',
           });
-          
+
           const savedInvoice = await this.invoiceRepository.save(newInvoice);
           let pendingInsertedInvoiceDetails: InvoiceDetail[] = [];
           // Create invoice details for each detail line
@@ -419,7 +424,7 @@ export class InvoiceService {
           });
         }
       }
-      
+
       return {
         success: true,
         message: `Synced ${processedInvoices.length} invoices from Epicor`,
@@ -430,7 +435,7 @@ export class InvoiceService {
       throw error;
     }
   }
-  
+
   /**
    * Group invoice details by invoice number
    * @param invoices Array of EpicorInvoice objects
@@ -438,17 +443,17 @@ export class InvoiceService {
    */
   private groupInvoicesByNumber(invoices: EpicorInvoice[]): Record<string, EpicorInvoice[]> {
     const grouped: Record<string, EpicorInvoice[]> = {};
-    
+
     for (const invoice of invoices) {
       const invoiceNum = invoice.InvcHead_InvoiceNum.toString();
-      
+
       if (!grouped[invoiceNum]) {
         grouped[invoiceNum] = [];
       }
-      
+
       grouped[invoiceNum].push(invoice);
     }
-    
+
     return grouped;
   }
 }
