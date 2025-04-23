@@ -1,25 +1,25 @@
 import {
-    Body,
-    Controller,
-    Get,
-    HttpCode,
-    HttpStatus,
-    Logger,
-    Param,
-    Patch,
-    Post,
-    Query,
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Logger,
+  Param,
+  Patch,
+  Post,
+  Query,
 } from '@nestjs/common';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { QueryInvoiceDto } from './dto/query-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { InvoiceService } from './invoice.service';
 
-@Controller('invoice')
+@Controller('api')
 export class InvoiceController {
   private readonly logger = new Logger(InvoiceController.name);
 
-  constructor(private readonly invoiceService: InvoiceService) {}
+  constructor(private readonly invoiceService: InvoiceService) { }
 
   @Post()
   @HttpCode(HttpStatus.CREATED)

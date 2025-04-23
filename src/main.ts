@@ -23,7 +23,7 @@ async function bootstrap() {
   );
 
   // Set global prefix
-  app.setGlobalPrefix('api');
+  app.setGlobalPrefix('e-invoice');
 
   // Get configuration
   const configService = app.get(ConfigService);
