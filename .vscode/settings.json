@@ -1,0 +1,19 @@
+{
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.codeActionsOnSave": {
+        "source.fixAll.eslint": "true",
+        "source.organizeImports": "true"
+    },
+    "[typescript]": {
+        "editor.defaultFormatter": "vscode.typescript-language-features"
+    },
+    "eslint.useESLintClass": true,
+    "eslint.experimental.useFlatConfig": true, 
+    "eslint.validate": [
+        "javascript",
+        "typescript"
+    ],
+    "prettier.singleQuote": true,
+    "prettier.trailingComma": "all"
+}
