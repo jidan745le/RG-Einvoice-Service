@@ -262,8 +262,8 @@ export class InvoiceService {
         throw new Error('Cannot submit invoice without details');
       }
 
-      // Generate order number using UUID (shortened)
-      const orderNo = `ORD-${uuidv4().substring(0, 8)}-${Date.now()}`;
+      // Generate order number using UUID (shortened) and include erpInvoiceId for easier retrieval in callback
+      const orderNo = `ORD-${uuidv4().substring(0, 8)}-${invoice.erpInvoiceId}`;
 
       // Map invoice details to Baiwang format
       const invoiceDetailList = details.map(detail => ({
@@ -298,7 +298,7 @@ export class InvoiceService {
       const result = await this.baiwangService.submitInvoice(baiwangRequest);
 
       // Update invoice status and submitter
-      await this.invoiceRepository.update(id, {
+      await this.invoiceRepository.update(invoice.id, {
         status: 'PENDING',
         submittedBy,
       });
@@ -329,14 +329,105 @@ export class InvoiceService {
   async processCallback(callbackData: any): Promise<any> {
     this.logger.log(`Processing callback: ${JSON.stringify(callbackData)}`);
 
-    // For now, just log the data
-    // In a real implementation, we would update the invoice status, e-invoice ID, PDF URL, etc.
+    try {
+      // Parse callback data
+      const callbackJson = typeof callbackData === 'string' ? JSON.parse(callbackData) : callbackData;
+      const data = typeof callbackJson.data === 'string' ? JSON.parse(callbackJson.data) : callbackJson.data;
 
-    return {
-      success: true,
-      message: 'Callback processed successfully',
-      data: callbackData,
-    };
+      // Check if it's a successful invoice
+      if (data.status === '01') { // 01 represents success
+        // Find the invoice using orderNo which contains the ERP invoice ID
+        const orderNo = data.orderNo;
+
+        // Extract the erpInvoiceId if it's included in the orderNo
+        let erpInvoiceId: number | undefined = undefined;
+        if (orderNo) {
+          try {
+            // Try to extract the erpInvoiceId from the orderNo if it was formatted that way during submission
+            const match = orderNo.match(/ORD-[a-f0-9]+-(\d+)/);
+            if (match && match[1]) {
+              erpInvoiceId = parseInt(match[1], 10);
+            }
+          } catch (error) {
+            this.logger.warn(`Could not extract erpInvoiceId from orderNo: ${orderNo}`);
+          }
+        }
+
+        // If we couldn't extract from orderNo, try to find by other means
+        let invoice;
+        if (erpInvoiceId) {
+          invoice = await this.invoiceRepository.findOne({
+            where: { erpInvoiceId }
+          });
+        }
+
+        if (!invoice) {
+          throw new Error(`Could not find invoice with orderNo: ${orderNo}`);
+        }
+
+        // Update invoice with e-invoice information
+        await this.invoiceRepository.update(invoice.id, {
+          status: 'SUBMITTED',
+          eInvoiceId: data.serialNo, // serialNo as E-Invoice ID
+          eInvoiceDate: new Date(data.invoiceTime), // Invoice time as E-Invoice Date
+          submittedBy: data.drawer || invoice.submittedBy, // Drawer as submitter
+          eInvoicePdf: data.pdfUrl, // PDF URL
+          comment: `E-Invoice issued successfully: ${data.statusMessage}`
+        });
+
+        return {
+          success: true,
+          message: 'Invoice updated successfully',
+          data: {
+            erpInvoiceId,
+            status: 'SUBMITTED',
+            eInvoiceId: data.serialNo
+          }
+        };
+      } else {
+        // Handle error or other status
+        this.logger.warn(`Received non-success status: ${data.status} - ${data.statusMessage}`);
+
+        // Try to extract erpInvoiceId from orderNo
+        let erpInvoiceId: number | undefined = undefined;
+        if (data.orderNo) {
+          try {
+            const match = data.orderNo.match(/ORD-[a-f0-9]+-(\d+)/);
+            if (match && match[1]) {
+              erpInvoiceId = parseInt(match[1], 10);
+            }
+          } catch (error) {
+            this.logger.warn(`Could not extract erpInvoiceId from orderNo: ${data.orderNo}`);
+          }
+        }
+
+        if (erpInvoiceId) {
+          const invoice = await this.invoiceRepository.findOne({
+            where: { erpInvoiceId }
+          });
+
+          if (invoice) {
+            await this.invoiceRepository.update(invoice.id, {
+              status: 'ERROR',
+              comment: `E-Invoice error: ${data.statusMessage || data.errorMessage || 'Unknown error'}`
+            });
+          }
+        }
+
+        return {
+          success: false,
+          message: 'Invoice status update failed',
+          error: data.statusMessage || data.errorMessage || 'Unknown error'
+        };
+      }
+    } catch (error) {
+      this.logger.error(`Error processing callback: ${error.message}`, error.stack);
+      return {
+        success: false,
+        message: 'Error processing callback',
+        error: error.message
+      };
+    }
   }
 
   /**
