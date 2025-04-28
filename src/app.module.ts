@@ -6,6 +6,7 @@ import { AppService } from './app.service';
 import { InvoiceModule } from './modules/invoice/invoice.module';
 import { BaiwangModule } from './modules/baiwang/baiwang.module';
 import { EpicorModule } from './modules/epicor/epicor.module';
+import { AuthModule } from './modules/auth/auth.module';
 import { Invoice } from './modules/invoice/entities/invoice.entity';
 import { InvoiceDetail } from './modules/invoice/entities/invoice-detail.entity';
 import * as path from 'path';
@@ -34,6 +35,7 @@ import * as path from 'path';
     InvoiceModule,
     BaiwangModule,
     EpicorModule,
+    AuthModule,
   ],
   controllers: [AppController],
   providers: [AppService],

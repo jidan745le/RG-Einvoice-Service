@@ -1,0 +1,31 @@
+// Sample usage in a controller to apply the AuthGuard to specific controllers or routes
+
+// To apply to an entire controller:
+import { Controller, UseGuards } from '@nestjs/common';
+import { AuthGuard } from './modules/auth/auth.guard';
+
+@Controller('some-path')
+@UseGuards(AuthGuard)
+export class SomeController {
+  // All routes in this controller will be protected
+}
+
+// To apply to specific routes only:
+import { Controller, Get, UseGuards } from '@nestjs/common';
+import { AuthGuard } from './modules/auth/auth.guard';
+
+@Controller('some-path')
+export class SomeController {
+  @Get('protected-route')
+  @UseGuards(AuthGuard)
+  getProtectedData() {
+    // This route will be protected
+    return { message: 'This data is protected' };
+  }
+
+  @Get('public-route')
+  getPublicData() {
+    // This route will be public
+    return { message: 'This data is public' };
+  }
+} 
