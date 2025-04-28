@@ -4,6 +4,7 @@ import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AuthGuard } from './modules/auth/auth.guard';
+import { AuthModule } from './modules/auth/auth.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -23,8 +24,8 @@ async function bootstrap() {
     }),
   );
 
-  // Get the Auth guard
-  const authGuard = app.get(AuthGuard);
+  // Get the Auth guard from the AuthModule
+  const authGuard = app.select(AuthModule).get(AuthGuard);
   app.useGlobalGuards(authGuard);
 
   // // Set global prefix
