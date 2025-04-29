@@ -20,7 +20,7 @@ export class AuthService {
             );
 
             const response = await lastValueFrom(
-                this.httpService.get(`${customerPortalUrl}/api/verify-auth`, {
+                this.httpService.get(`${customerPortalUrl}/verify-auth`, {
                     headers: {
                         Authorization: `Bearer ${token}`,
                     },
