@@ -10,6 +10,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { Invoice } from './modules/invoice/entities/invoice.entity';
 import { InvoiceDetail } from './modules/invoice/entities/invoice-detail.entity';
 import * as path from 'path';
+import { ExcelModule } from './modules/excel/excel.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import * as path from 'path';
     BaiwangModule,
     EpicorModule,
     AuthModule,
+    ExcelModule,
   ],
   controllers: [AppController],
   providers: [AppService],
