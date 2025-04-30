@@ -682,13 +682,13 @@ export class InvoiceService {
 
       // Update invoice with red info information
       await this.invoiceRepository.update(invoice.id, {
-        status: data.redInfoStatus === '01' ? 'RED_NOTE' : 'ERROR',
-        redInfoNo: data.redInfoNo,
-        redInfoSerialNo: data.redInfoSerialNo,
-        redInfoStatus: data.redInfoStatus,
-        redInfoMessage: data.redInfoMessage,
-        redInfoType: data.redInfoType,
-        comment: `Red info ${data.redInfoStatus === '01' ? 'approved' : 'rejected'}: ${data.redInfoMessage}`
+        status: data.redConfirmStatus === '01' ? 'RED_NOTE' : 'ERROR',
+        redInfoNo: data.redConfirmNo,
+        redInfoSerialNo: data.redConfirmSerialNo,
+        redInfoStatus: data.redConfirmStatus,
+        redInfoMessage: data.redConfirmMessage,
+        redInfoType: data.redConfirmType,
+        comment: `Red info ${data.redConfirmStatus === '01' ? 'approved' : 'rejected'}: ${data.redConfirmMessage}`
       });
 
       return {
@@ -696,9 +696,9 @@ export class InvoiceService {
         message: 'Red info callback processed successfully',
         data: {
           erpInvoiceId,
-          status: data.redInfoStatus === '01' ? 'RED_NOTE' : 'ERROR',
-          redInfoNo: data.redInfoNo,
-          redInfoSerialNo: data.redInfoSerialNo
+          status: data.redConfirmStatus === '01' ? 'RED_NOTE' : 'ERROR',
+          redInfoNo: data.redConfirmNo,
+          redInfoSerialNo: data.redConfirmSerialNo
         }
       };
     } catch (error) {
