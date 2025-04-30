@@ -652,6 +652,17 @@ export class InvoiceService {
       const callbackJson = typeof callbackData === 'string' ? JSON.parse(callbackData) : callbackData;
       const data = typeof callbackJson.data === 'string' ? JSON.parse(callbackJson.data) : callbackJson.data;
 
+      // Only process red confirm callbacks
+      if (callbackJson.method !== 'baiwang.s.callback.redconfirm') {
+        return {
+          success: true,
+          message: 'Ignoring non-red-confirm callback',
+          data: {
+            method: callbackJson.method
+          }
+        };
+      }
+
       // Find the invoice using orderNo which contains the ERP invoice ID
       const orderNo = data.orderNo;
       let erpInvoiceId: number | undefined = undefined;
