@@ -14,6 +14,7 @@ import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { QueryInvoiceDto } from './dto/query-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { InvoiceService } from './invoice.service';
+import { RedInvoiceRequestDto } from './dto/red-invoice.dto';
 
 @Controller("invoice")
 export class InvoiceController {
@@ -67,5 +68,25 @@ export class InvoiceController {
   async syncFromEpicor() {
     this.logger.log('Starting sync from Epicor');
     return this.invoiceService.syncFromEpicor();
+  }
+
+  /**
+   * Submit red invoice request
+   * @param id Original invoice ID
+   * @param submittedBy User who submitted the red invoice
+   * @returns Result of red invoice submission
+   */
+  @Post(':id/red')
+  async submitRedInvoice(
+    @Param('id') id: string,
+    @Body('submittedBy') submittedBy: string,
+  ) {
+    return this.invoiceService.submitRedInvoice(parseInt(id), submittedBy);
+  }
+
+  @Post(':id/red/callback')
+  @HttpCode(HttpStatus.OK)
+  async redCallback(@Body() callbackData: any) {
+    return this.invoiceService.processRedInfoCallback(callbackData);
   }
 }

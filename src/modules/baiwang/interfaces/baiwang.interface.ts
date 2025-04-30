@@ -97,4 +97,59 @@ export interface BaiwangCallbackData {
   statusDesc: string;
   callBackResult: string;
   callBackMsg?: string;
+}
+
+export interface RedInvoiceDetailItem {
+  originalInvoiceDetailNo?: string;
+  goodsName: string;
+  goodsCode: string;
+  goodsQuantity?: string;
+  goodsPrice?: string;
+  goodsTaxRate: string;
+  goodsTotalPrice: string;
+  goodsTotalTax: string;
+  goodsSpecification?: string;
+  goodsUnit?: string;
+  freeTaxMark?: string;
+  preferentialMark?: string;
+  vatSpecialManagement?: string;
+}
+
+export interface BaiwangRedInvoiceRequest {
+  taxNo: string;
+  orderNo: string;
+  originalSerialNo?: string;
+  originalOrderNo?: string;
+  originalInvoiceCode?: string;
+  originalInvoiceNo?: string;
+  originalDigitInvoiceNo?: string;
+  invoiceTypeCode?: string;
+  fastIssueRedType?: string;
+  redInvoiceLabel?: string;
+  entryIdentity?: string;
+  applyType?: string;
+  pushEmail?: string;
+  pushPhone?: string;
+  drawerId?: string;
+  orgId?: string;
+  callBackUrl?: string;
+  details?: RedInvoiceDetailItem[];
+}
+
+export interface BaiwangRedInvoiceResponse {
+  success: boolean;
+  method: string;
+  requestId: string;
+  response?: {
+    redInfoSerialNo?: string;
+    orderNo?: string;
+    serialNo?: string;
+    redConfirmSerialNo?: string;
+  };
+  errorResponse?: {
+    code: number;
+    message: string;
+    subCode?: string;
+    subMessage?: string;
+  };
 } 

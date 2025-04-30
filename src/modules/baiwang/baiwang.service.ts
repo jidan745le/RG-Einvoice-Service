@@ -4,7 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { v4 as uuidv4 } from 'uuid';
 import * as CryptoJS from 'crypto-js';
 import { lastValueFrom } from 'rxjs';
-import { BaiwangConfig, BaiwangInvoiceRequest, BaiwangResponse } from './interfaces/baiwang.interface';
+import { BaiwangConfig, BaiwangInvoiceRequest, BaiwangResponse, BaiwangRedInvoiceRequest, BaiwangRedInvoiceResponse } from './interfaces/baiwang.interface';
 
 @Injectable()
 export class BaiwangService {
@@ -146,5 +146,59 @@ export class BaiwangService {
       success: true,
       data: callbackData,
     };
+  }
+
+  /**
+   * Submit red invoice request to Baiwang
+   * @param redInvoiceData Red invoice request data
+   * @returns Response from Baiwang API
+   */
+  async submitRedInvoice(redInvoiceData: BaiwangRedInvoiceRequest): Promise<BaiwangRedInvoiceResponse> {
+    try {
+      this.logger.log(`Submitting red invoice to Baiwang: ${JSON.stringify(redInvoiceData)}`);
+
+      // Create protocol request parameters
+      const textParams = {
+        method: 'baiwang.s.outputinvoice.fastRed',
+        version: this.config.version,
+        appKey: this.config.appKey,
+        format: 'json',
+        timestamp: String(Date.now()),
+        requestId: uuidv4(),
+        token: this.config.token,
+        type: 'sync',
+      };
+
+      // Generate request body
+      const requestBody = JSON.stringify(redInvoiceData);
+      this.logger.log(`Request body: ${requestBody}`);
+
+      // Generate signature
+      const sign = this.generateSignature(textParams, requestBody);
+
+      // Build URL with parameters
+      const url = this.buildUrl(textParams, sign);
+
+      // Send HTTP request
+      const response = await lastValueFrom(
+        this.httpService.post(url, requestBody, {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        })
+      );
+      this.logger.log(`Baiwang API response: ${JSON.stringify(response.data)}`);
+
+      if (response.data.success !== true) {
+        throw new Error(`${response.data.errorResponse.code} - ${response.data.errorResponse.message} - ${response.data.errorResponse.subMessage}`);
+      }
+      return response.data;
+    } catch (error) {
+      this.logger.error(`Error submitting red invoice to Baiwang: ${error.message}`, error.stack);
+      throw new HttpException({
+        status: HttpStatus.BAD_REQUEST,
+        error: `红字发票提交失败: ${error.message}`,
+      }, HttpStatus.BAD_REQUEST);
+    }
   }
 }

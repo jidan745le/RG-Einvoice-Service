@@ -32,10 +32,13 @@ export class InvoiceService {
   async create(createInvoiceDto: CreateInvoiceDto): Promise<Invoice> {
     const { details, ...invoiceData } = createInvoiceDto;
 
-    // Create invoice
+    // Create invoice with proper type conversion
     const invoice = this.invoiceRepository.create({
       ...invoiceData,
       status: 'PENDING',
+      orderNumber: invoiceData.orderNumber?.toString(),
+      erpInvoiceId: Number(invoiceData.erpInvoiceId),
+      invoiceAmount: invoiceData.invoiceAmount ? Number(invoiceData.invoiceAmount) : undefined,
     });
 
     const savedInvoice = await this.invoiceRepository.save(invoice);
@@ -46,6 +49,10 @@ export class InvoiceService {
         ...detail,
         invoiceId: savedInvoice.id,
         erpInvoiceId: savedInvoice.erpInvoiceId,
+        sellingShipQty: detail.sellingShipQty ? Number(detail.sellingShipQty) : undefined,
+        docUnitPrice: detail.docUnitPrice ? Number(detail.docUnitPrice) : undefined,
+        docExtPrice: detail.docExtPrice ? Number(detail.docExtPrice) : undefined,
+        taxPercent: detail.taxPercent ? Number(detail.taxPercent) : undefined,
       }));
 
       await this.invoiceDetailRepository.save(invoiceDetails);
@@ -220,7 +227,10 @@ export class InvoiceService {
     const { details, ...invoiceData } = updateInvoiceDto;
 
     // Update invoice
-    await this.invoiceRepository.update(id, invoiceData);
+    await this.invoiceRepository.update(id, {
+      ...invoiceData,
+      orderNumber: invoiceData.orderNumber?.toString(), // Convert to string if it exists
+    });
 
     // Update details if provided
     if (details && details.length > 0) {
@@ -349,7 +359,7 @@ export class InvoiceService {
               erpInvoiceId = parseInt(match[1], 10);
             }
           } catch (error) {
-            this.logger.warn(`Could not extract erpInvoiceId from orderNo: ${orderNo}`);
+            this.logger.warn(`Could not extract erpInvoiceId from : ${orderNo}`);
           }
         }
 
@@ -372,6 +382,8 @@ export class InvoiceService {
           eInvoiceDate: new Date(data.invoiceTime), // Invoice time as E-Invoice Date
           submittedBy: data.drawer || invoice.submittedBy, // Drawer as submitter
           eInvoicePdf: data.pdfUrl, // PDF URL
+          orderNumber: orderNo, // Store the orderNo
+          digitInvoiceNo: data.digitInvoiceNo,
           comment: `E-Invoice issued successfully: ${data.statusMessage}`
         });
 
@@ -381,7 +393,8 @@ export class InvoiceService {
           data: {
             erpInvoiceId,
             status: 'SUBMITTED',
-            eInvoiceId: data.serialNo
+            eInvoiceId: data.serialNo,
+            orderNo
           }
         };
       } else {
@@ -409,6 +422,7 @@ export class InvoiceService {
           if (invoice) {
             await this.invoiceRepository.update(invoice.id, {
               status: 'ERROR',
+              orderNumber: data.orderNo, // Store the orderNo even for failed attempts
               comment: `E-Invoice error: ${data.statusMessage || data.errorMessage || 'Unknown error'}`
             });
           }
@@ -477,7 +491,7 @@ export class InvoiceService {
             customerName: firstInvoice.Customer_Name,
             customerResaleId: firstInvoice.Customer_ResaleID,
             invoiceComment: firstInvoice.InvcHead_InvoiceComment,
-            orderNumber: firstInvoice.OrderHed_OrderNum,
+            orderNumber: firstInvoice.OrderHed_OrderNum?.toString(),
             orderDate: new Date(firstInvoice.OrderHed_OrderDate),
             poNumber: firstInvoice.OrderHed_PONum,
             status: 'PENDING',
@@ -546,5 +560,154 @@ export class InvoiceService {
     }
 
     return grouped;
+  }
+
+  /**
+   * Submit red invoice request to Baiwang
+   * @param id Original invoice ID
+   * @param submittedBy User who submitted the red invoice
+   * @returns Result of red invoice submission
+   */
+  async submitRedInvoice(id: number, submittedBy: string): Promise<any> {
+    try {
+      // Get original invoice
+      const originalInvoice = await this.findOne(id);
+      if (!originalInvoice) {
+        throw new NotFoundException(`Invoice with ID ${id} not found`);
+      }
+
+      // Generate order number for red invoice
+      const orderNo = `RED-${uuidv4().substring(0, 8)}-${originalInvoice.erpInvoiceId}`;
+
+      // Prepare red invoice request
+      const request = {
+        taxNo: '338888888888SMB', // This should be configurable
+        orderNo,
+        originalSerialNo: originalInvoice.eInvoiceId,
+        originalOrderNo: originalInvoice.orderNumber,
+        originalDigitInvoiceNo: originalInvoice.digitInvoiceNo,
+        callBackUrl: 'http://8.219.189.158:81/e-invoice/api/invoice/red/callback',
+      };
+
+      // Submit to Baiwang
+      const result = await this.baiwangService.submitRedInvoice(request);
+
+      // Create a new invoice record for the red invoice
+      const redInvoice = this.invoiceRepository.create({
+        erpInvoiceId: originalInvoice.erpInvoiceId,
+        status: 'PENDING',
+        orderNumber: orderNo,
+        customerName: originalInvoice.customerName,
+        customerResaleId: originalInvoice.customerResaleId,
+        invoiceComment: `Red invoice for ${originalInvoice.erpInvoiceId}`,
+        fapiaoType: 'RED',
+        submittedBy,
+      });
+
+      const savedRedInvoice = await this.invoiceRepository.save(redInvoice);
+
+      // // Copy invoice details
+      // const redInvoiceDetails = originalInvoice.invoiceDetails.map(detail =>
+      //   this.invoiceDetailRepository.create({
+      //     invoiceId: savedRedInvoice.id,
+      //     erpInvoiceId: detail.erpInvoiceId,
+      //     lineDescription: detail.lineDescription,
+      //     commodityCode: detail.commodityCode,
+      //     uomDescription: detail.uomDescription,
+      //     salesUm: detail.salesUm,
+      //     sellingShipQty: detail.sellingShipQty,
+      //     docUnitPrice: detail.docUnitPrice,
+      //     docExtPrice: detail.docExtPrice,
+      //     taxPercent: detail.taxPercent,
+      //   })
+      // );
+
+      // await this.invoiceDetailRepository.save(redInvoiceDetails);
+
+      return {
+        success: true,
+        message: 'Red invoice submitted successfully',
+        data: {
+          orderNo,
+          redInvoiceId: savedRedInvoice.id,
+          result
+        }
+      };
+    } catch (error) {
+      this.logger.error(`Error submitting red invoice: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * Process red info callback from Baiwang
+   * @param callbackData Callback data from Baiwang
+   * @returns Process result
+   */
+  async processRedInfoCallback(callbackData: any): Promise<any> {
+    this.logger.log(`Processing red info callback: ${JSON.stringify(callbackData)}`);
+
+    try {
+      // Parse callback data
+      const callbackJson = typeof callbackData === 'string' ? JSON.parse(callbackData) : callbackData;
+      const data = typeof callbackJson.data === 'string' ? JSON.parse(callbackJson.data) : callbackJson.data;
+
+      // Find the invoice using orderNo which contains the ERP invoice ID
+      const orderNo = data.orderNo;
+      let erpInvoiceId: number | undefined = undefined;
+
+      if (orderNo) {
+        try {
+          // Try to extract the erpInvoiceId from the orderNo if it was formatted that way during submission
+          const match = orderNo.match(/RED-[a-f0-9]+-(\d+)/);
+          if (match && match[1]) {
+            erpInvoiceId = parseInt(match[1], 10);
+          }
+        } catch (error) {
+          this.logger.warn(`Could not extract erpInvoiceId from orderNo: ${orderNo}`);
+        }
+      }
+
+      // If we couldn't extract from orderNo, try to find by other means
+      let invoice;
+      if (erpInvoiceId) {
+        invoice = await this.invoiceRepository.findOne({
+          where: { erpInvoiceId }
+        });
+      }
+
+      if (!invoice) {
+        throw new Error(`Could not find invoice with orderNo: ${orderNo}`);
+      }
+
+      // Update invoice with red info information
+      await this.invoiceRepository.update(invoice.id, {
+        status: data.redInfoStatus === '01' ? 'RED_NOTE' : 'ERROR',
+        redInfoNo: data.redInfoNo,
+        redInfoSerialNo: data.redInfoSerialNo,
+        redInfoStatus: data.redInfoStatus,
+        redInfoMessage: data.redInfoMessage,
+        redInfoType: data.redInfoType,
+        comment: `Red info ${data.redInfoStatus === '01' ? 'approved' : 'rejected'}: ${data.redInfoMessage}`
+      });
+
+      return {
+        success: true,
+        message: 'Red info callback processed successfully',
+        data: {
+          erpInvoiceId,
+          status: data.redInfoStatus === '01' ? 'RED_NOTE' : 'ERROR',
+          redInfoNo: data.redInfoNo,
+          redInfoSerialNo: data.redInfoSerialNo
+        }
+      };
+    } catch (error) {
+      this.logger.error(`Error processing red info callback: ${error.message}`, error.stack);
+      return {
+        success: false,
+        message: 'Error processing red info callback',
+        error: error.message
+      };
+    }
   }
 }

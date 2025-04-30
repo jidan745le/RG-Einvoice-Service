@@ -33,6 +33,12 @@ export class Invoice {
   @Column({ name: 'status', default: 'PENDING' })
   status: string;
 
+  @Column({ name: 'order_number', nullable: true })
+  orderNumber: string;
+
+  @Column({ name: 'digit_invoice_no', nullable: true })
+  digitInvoiceNo: string;
+
   @Column({ name: 'e_invoice_id', nullable: true })
   eInvoiceId: string;
 
@@ -45,21 +51,33 @@ export class Invoice {
   @Column({ name: 'submitted_by', nullable: true })
   submittedBy: string;
 
-  @Column({ name: 'order_number', nullable: true })
-  orderNumber: number;
-
   @Column({ name: 'order_date', type: 'date', nullable: true })
   orderDate: Date;
 
   @Column({ name: 'po_number', nullable: true })
   poNumber: string;
 
-  @Column({ name: 'comment', nullable: true })
+  @Column({ nullable: true })
   comment: string;
+
+  @Column({ nullable: true })
+  redInfoNo: string;
+
+  @Column({ nullable: true })
+  redInfoSerialNo: string;
+
+  @Column({ nullable: true })
+  redInfoStatus: string;
+
+  @Column({ nullable: true })
+  redInfoMessage: string;
+
+  @Column({ nullable: true })
+  redInfoType: string;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
-  
+
   @OneToMany(() => InvoiceDetail, invoiceDetail => invoiceDetail.invoice)
   invoiceDetails: InvoiceDetail[];
 
