@@ -3,6 +3,12 @@ import { Invoice } from '../modules/invoice/entities/invoice.entity';
 import { InvoiceDetail } from '../modules/invoice/entities/invoice-detail.entity';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as dotenv from 'dotenv';
+
+// 加载.env文件
+const envPath = path.resolve(process.cwd(), '.env');
+dotenv.config({ path: envPath });
+console.log(`已加载环境变量文件: ${envPath}`);
 
 const isDev = process.env.NODE_ENV === 'development';
 const logFile = path.join(process.cwd(), 'logs', 'database-cleanup.log');
@@ -28,6 +34,12 @@ function logOperation(message: string): void {
 async function cleanupAllData(batchSize: number = 1000): Promise<{ invoices: number; details: number }> {
     logOperation('Starting cleanup of all data');
 
+    const host = process.env.DB_HOST || 'localhost';
+    const port = parseInt(process.env.DB_PORT || '3306', 10);
+    const database = process.env.DB_DATABASE || 'einvoice';
+
+    logOperation(`连接到数据库: ${host}:${port}/${database}`);
+
     let totalInvoices = 0;
     let totalDetails = 0;
 
@@ -36,7 +48,7 @@ async function cleanupAllData(batchSize: number = 1000): Promise<{ invoices: num
         const connection = await createConnection({
             type: 'mysql',
             host: process.env.DB_HOST || 'localhost',
-            port: Number(process.env.DB_PORT) || 3306,
+            port: parseInt(process.env.DB_PORT || '3306', 10),
             username: process.env.DB_USERNAME || 'root',
             password: process.env.DB_PASSWORD || '123456',
             database: process.env.DB_DATABASE || 'einvoice',
@@ -60,6 +72,8 @@ async function cleanupAllData(batchSize: number = 1000): Promise<{ invoices: num
                     logOperation('No data found to delete');
                     return;
                 }
+
+                logOperation(`找到 ${ids.length} 条发票记录`);
 
                 // 2. 分批删除发票明细
                 for (let i = 0; i < ids.length; i += batchSize) {
@@ -102,17 +116,81 @@ async function cleanupAllData(batchSize: number = 1000): Promise<{ invoices: num
     }
 }
 
+/**
+ * 打印帮助信息
+ */
+function printHelp(): void {
+    console.log(`
+数据库清理工具 - 使用说明:
+
+命令格式:
+  node directCleanup.js [options]
+
+参数:
+  --host=HOST       数据库主机地址 (默认: ${process.env.DB_HOST || 'localhost'})
+  --port=PORT       数据库端口 (默认: ${process.env.DB_PORT || '3306'})
+  --user=USER       数据库用户名 (默认: ${process.env.DB_USERNAME || 'root'})
+  --password=PASS   数据库密码
+  --database=DB     数据库名称 (默认: ${process.env.DB_DATABASE || 'einvoice'})
+  --batch=SIZE      批处理大小 (默认: 1000)
+  --help            显示帮助信息
+
+示例:
+  node directCleanup.js --host=localhost --port=3306 --user=root --password=mypassword --database=einvoice
+
+环境变量已从.env文件加载
+    `);
+}
+
+/**
+ * 解析命令行参数
+ */
+function parseArguments(): { [key: string]: string } {
+    const args = process.argv.slice(2);
+    const result: { [key: string]: string } = {};
+
+    for (const arg of args) {
+        if (arg === '--help') {
+            result['help'] = 'true';
+            continue;
+        }
+
+        if (arg.startsWith('--')) {
+            const [key, value] = arg.substring(2).split('=');
+            if (key && value) {
+                result[key] = value;
+            }
+        }
+    }
+
+    return result;
+}
+
 async function bootstrap() {
     try {
         // 解析命令行参数
-        const args = process.argv.slice(2);
-        const command = args[0];
+        const args = parseArguments();
 
-        if (!command) {
-            console.log('已默认执行删除所有数据的操作');
+        if (args['help']) {
+            printHelp();
+            return;
         }
 
-        const result = await cleanupAllData();
+        // 设置数据库配置参数，优先使用命令行参数，其次使用环境变量，最后使用默认值
+        const dbConfig = {
+            host: args['host'] || process.env.DB_HOST || 'localhost',
+            port: parseInt(args['port'] || process.env.DB_PORT || '3306', 10),
+            username: args['user'] || process.env.DB_USERNAME || 'root',
+            password: args['password'] || process.env.DB_PASSWORD || '123456',
+            database: args['database'] || process.env.DB_DATABASE || 'einvoice'
+        };
+
+        const batchSize = parseInt(args['batch'] || '1000', 10);
+
+        console.log('执行数据清理操作...');
+        console.log(`数据库连接信息: ${dbConfig.host}:${dbConfig.port}/${dbConfig.database}`);
+
+        const result = await cleanupAllData(batchSize);
         console.log(`删除完成: 删除了 ${result.invoices} 张发票和 ${result.details} 条发票明细`);
     } catch (error: any) {
         console.error('删除过程中出错:', error.message || String(error));
