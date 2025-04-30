@@ -16,6 +16,7 @@ import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { InvoiceService } from './invoice.service';
 import { RedInvoiceRequestDto } from './dto/red-invoice.dto';
 import { Public } from '../auth/decorators/public.decorator';
+import { MergeInvoicesDto } from './dto/merge-invoices.dto';
 
 @Controller("invoice")
 export class InvoiceController {
@@ -93,5 +94,17 @@ export class InvoiceController {
   @HttpCode(HttpStatus.OK)
   async redCallback(@Body() callbackData: any) {
     return this.invoiceService.processRedInfoCallback(callbackData);
+  }
+
+  /**
+   * Merge multiple invoices for the same customer
+   * @param mergeDto DTO containing invoice IDs to merge and submitter
+   * @returns Result of merge and submission
+   */
+  @Post('/merge')
+  @HttpCode(HttpStatus.OK)
+  async mergeInvoices(@Body() mergeDto: MergeInvoicesDto) {
+    this.logger.log(`Merging invoices: ${mergeDto.erpInvoiceIds.join(', ')} by ${mergeDto.submittedBy}`);
+    return this.invoiceService.mergeAndSubmitInvoices(mergeDto);
   }
 }

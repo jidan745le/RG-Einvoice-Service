@@ -344,6 +344,12 @@ export class InvoiceService {
       const callbackJson = typeof callbackData === 'string' ? JSON.parse(callbackData) : callbackData;
       const data = typeof callbackJson.data === 'string' ? JSON.parse(callbackJson.data) : callbackJson.data;
 
+      // 检查是否是合并发票的回调
+      const orderNo = data.orderNo;
+      if (orderNo && orderNo.startsWith('MERGE-')) {
+        return this.processMergedInvoiceCallback(callbackData);
+      }
+
       // Check if it's a successful invoice
       if (data.status === '01') { // 01 represents success
         // Find the invoice using orderNo which contains the ERP invoice ID
@@ -720,5 +726,287 @@ export class InvoiceService {
         error: error.message
       };
     }
+  }
+
+  /**
+   * 合并发票并提交到百望
+   * @param mergeDto 包含要合并的发票ID和提交人
+   * @returns 合并结果
+   */
+  async mergeAndSubmitInvoices(mergeDto: { erpInvoiceIds: number[]; submittedBy: string }): Promise<any> {
+    try {
+      const { erpInvoiceIds, submittedBy } = mergeDto;
+      this.logger.log(`Merging invoices: ${erpInvoiceIds.join(', ')} by ${submittedBy}`);
+
+      if (!erpInvoiceIds.length) {
+        throw new Error('At least one invoice ID must be provided');
+      }
+
+      // 获取所有要合并的发票
+      const invoices: Invoice[] = [];
+      for (const id of erpInvoiceIds) {
+        try {
+          const invoice = await this.findByErpInvoiceId(id);
+          invoices.push(invoice);
+        } catch (error) {
+          this.logger.error(`Could not find invoice with ID ${id}: ${error.message}`);
+          throw new Error(`Invoice with ID ${id} not found`);
+        }
+      }
+
+      // 验证所有发票是否属于同一客户
+      const firstCustomer = invoices[0].customerName;
+      const firstCustomerResaleId = invoices[0].customerResaleId;
+      for (const invoice of invoices) {
+        if (invoice.customerName !== firstCustomer) {
+          throw new Error(`All invoices must be from the same customer. Expected ${firstCustomer}, got ${invoice.customerName}`);
+        }
+        if (invoice.customerResaleId !== firstCustomerResaleId) {
+          throw new Error(`All invoices must have the same customer resale ID. Expected ${firstCustomerResaleId}, got ${invoice.customerResaleId}`);
+        }
+        if (invoice.status === 'SUBMITTED') {
+          throw new Error(`Invoice with ID ${invoice.erpInvoiceId} has already been submitted`);
+        }
+      }
+
+      // 收集所有发票明细
+      let allDetails: InvoiceDetail[] = [];
+      for (const invoice of invoices) {
+        const details = await this.invoiceDetailRepository.find({
+          where: { invoiceId: invoice.id }
+        });
+        allDetails = [...allDetails, ...details];
+      }
+
+      if (!allDetails.length) {
+        throw new Error('No invoice details found for the selected invoices');
+      }
+
+      // 合并类似商品行
+      const mergedItems = this.mergeInvoiceDetails(allDetails);
+
+      // 计算合并后的总金额
+      const totalAmount = mergedItems.reduce((sum, item) => sum + Number(item.goodsTotalPrice), 0);
+
+      // 生成订单号，包含所有发票ID以便回调时识别
+      const orderNo = `MERGE-${uuidv4().substring(0, 8)}-${erpInvoiceIds.join('-')}`;
+
+      // 创建百望请求
+      const baiwangRequest = {
+        buyerTelephone: '',
+        priceTaxMark: '0',
+        callBackUrl: 'http://8.219.189.158:81/e-invoice/api/invoice/callback',
+        invoiceDetailList: mergedItems,
+        sellerAddress: 'Environment issue immediately',
+        buyerAddress: 'Test address',
+        buyerBankName: 'Test bank name',
+        invoiceType: '1',
+        taxNo: '338888888888SMB',
+        orderDateTime: new Date().toISOString().split('T')[0] + ' 10:00:00',
+        orderNo,
+        buyerName: firstCustomer || 'Test Company',
+        invoiceTypeCode: '02',
+        sellerBankName: 'Test Bank',
+        remarks: `Merged invoice for ${erpInvoiceIds.join(', ')}`,
+      };
+
+      // 提交到百望
+      const result = await this.baiwangService.submitInvoice(baiwangRequest);
+
+      // 更新所有发票状态
+      for (const invoice of invoices) {
+        await this.invoiceRepository.update(invoice.id, {
+          status: 'PENDING',
+          submittedBy,
+          orderNumber: orderNo,
+          comment: `Merged with invoices: ${erpInvoiceIds.filter(id => id !== invoice.erpInvoiceId).join(', ')}`,
+        });
+      }
+
+      return {
+        success: true,
+        message: 'Invoices merged and submitted successfully',
+        data: {
+          mergedInvoiceIds: erpInvoiceIds,
+          orderNo,
+          totalAmount,
+          result
+        },
+      };
+    } catch (error) {
+      this.logger.error(`Error merging invoices: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * 处理合并发票的回调数据
+   * @param callbackData 百望回调数据
+   * @returns 处理结果
+   */
+  async processMergedInvoiceCallback(callbackData: any): Promise<any> {
+    this.logger.log(`Processing merged invoice callback: ${JSON.stringify(callbackData)}`);
+
+    try {
+      // 解析回调数据
+      const callbackJson = typeof callbackData === 'string' ? JSON.parse(callbackData) : callbackData;
+      const data = typeof callbackJson.data === 'string' ? JSON.parse(callbackJson.data) : callbackJson.data;
+
+      // 检查是否成功开具发票
+      if (data.status === '01') { // 01表示成功
+        // 使用orderNo查找发票
+        const orderNo = data.orderNo;
+
+        // 从orderNo中提取所有的erpInvoiceId
+        if (!orderNo || !orderNo.startsWith('MERGE-')) {
+          // 如果不是合并发票的回调，交由普通回调处理
+          return this.processCallback(callbackData);
+        }
+
+        let erpInvoiceIds: number[] = [];
+        try {
+          // 从orderNo中提取所有的erpInvoiceId
+          const match = orderNo.match(/MERGE-[a-f0-9]+-(.+)/);
+          if (match && match[1]) {
+            erpInvoiceIds = match[1].split('-').map(id => parseInt(id, 10));
+          }
+        } catch (error) {
+          this.logger.warn(`Could not extract erpInvoiceIds from : ${orderNo}`);
+          throw new Error(`Could not parse order number: ${orderNo}`);
+        }
+
+        if (!erpInvoiceIds.length) {
+          throw new Error(`No invoice IDs found in order number: ${orderNo}`);
+        }
+
+        // 查找所有相关发票
+        const invoices: Invoice[] = [];
+        for (const id of erpInvoiceIds) {
+          try {
+            const invoice = await this.findByErpInvoiceId(id);
+            invoices.push(invoice);
+          } catch (error) {
+            this.logger.error(`Could not find invoice with ID ${id}: ${error.message}`);
+          }
+        }
+
+        if (!invoices.length) {
+          throw new Error(`Could not find any invoices with order number: ${orderNo}`);
+        }
+
+        // 更新所有发票的电子发票信息
+        for (const invoice of invoices) {
+          await this.invoiceRepository.update(invoice.id, {
+            status: 'SUBMITTED',
+            eInvoiceId: data.serialNo, // 使用serialNo作为电子发票ID
+            eInvoiceDate: new Date(data.invoiceTime), // 使用invoiceTime作为电子发票日期
+            submittedBy: data.drawer || invoice.submittedBy, // 使用drawer作为提交者
+            eInvoicePdf: data.pdfUrl, // PDF URL
+            orderNumber: orderNo, // 存储orderNo
+            digitInvoiceNo: data.digitInvoiceNo,
+            comment: `E-Invoice issued successfully for merged invoices: ${erpInvoiceIds.join(', ')}`
+          });
+        }
+
+        return {
+          success: true,
+          message: 'Merged invoices updated successfully',
+          data: {
+            erpInvoiceIds,
+            status: 'SUBMITTED',
+            eInvoiceId: data.serialNo,
+            orderNo
+          }
+        };
+      } else {
+        // 处理失败情况
+        this.logger.error(`Error processing callback: ${data.statusMessage}`);
+
+        // 尝试从orderNo中提取所有的erpInvoiceId
+        const orderNo = data.orderNo;
+        if (orderNo && orderNo.startsWith('MERGE-')) {
+          let erpInvoiceIds: number[] = [];
+          try {
+            const match = orderNo.match(/MERGE-[a-f0-9]+-(.+)/);
+            if (match && match[1]) {
+              erpInvoiceIds = match[1].split('-').map(id => parseInt(id, 10));
+            }
+          } catch (error) {
+            this.logger.warn(`Could not extract erpInvoiceIds from : ${orderNo}`);
+          }
+
+          // 更新所有相关发票的状态
+          if (erpInvoiceIds.length) {
+            for (const id of erpInvoiceIds) {
+              try {
+                const invoice = await this.findByErpInvoiceId(id);
+                await this.invoiceRepository.update(invoice.id, {
+                  status: 'ERROR',
+                  comment: `Error in merged invoice: ${data.statusMessage}`,
+                });
+              } catch (error) {
+                this.logger.error(`Could not update invoice with ID ${id}: ${error.message}`);
+              }
+            }
+          }
+        }
+
+        return {
+          success: false,
+          message: 'Error processing merged invoice callback',
+          error: data.statusMessage
+        };
+      }
+    } catch (error) {
+      this.logger.error(`Error processing merged invoice callback: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * 合并类似的发票明细行
+   * @param details 发票明细列表
+   * @returns 合并后的百望发票明细列表
+   */
+  private mergeInvoiceDetails(details: InvoiceDetail[]): any[] {
+    // 用于存储合并后的商品行，键为商品代码+单价+税率
+    const mergedMap: Record<string, any> = {};
+
+    for (const detail of details) {
+      // 创建唯一键
+      const key = `${detail.commodityCode || ''}-${detail.docUnitPrice || 0}-${detail.taxPercent || 0}`;
+
+      if (!mergedMap[key]) {
+        // 如果这个商品行还没有合并过，创建一个新的
+        mergedMap[key] = {
+          goodsTaxRate: String((detail.taxPercent ? parseFloat(String(detail.taxPercent)) / 100 : 0.13).toFixed(2)),
+          goodsTotalPrice: String(detail.docExtPrice || '0'),
+          goodsPrice: String(detail.docUnitPrice || '0'),
+          goodsQuantity: String(detail.sellingShipQty || '1'),
+          goodsUnit: detail.salesUm || '',
+          goodsName: detail.lineDescription || 'Product',
+          _originalQuantity: parseFloat(String(detail.sellingShipQty)) || 1,
+          _originalTotal: parseFloat(String(detail.docExtPrice)) || 0,
+        };
+      } else {
+        // 如果已经有了，增加数量和总价
+        const currentItem = mergedMap[key];
+        const additionalQty = parseFloat(String(detail.sellingShipQty)) || 1;
+        const additionalTotal = parseFloat(String(detail.docExtPrice)) || 0;
+
+        currentItem._originalQuantity += additionalQty;
+        currentItem._originalTotal += additionalTotal;
+
+        // 更新百望需要的字段
+        currentItem.goodsQuantity = String(currentItem._originalQuantity);
+        currentItem.goodsTotalPrice = String(currentItem._originalTotal.toFixed(2));
+      }
+    }
+
+    // 转换为数组并移除内部使用的临时字段
+    return Object.values(mergedMap).map(item => {
+      const { _originalQuantity, _originalTotal, ...rest } = item;
+      return rest;
+    });
   }
 }
