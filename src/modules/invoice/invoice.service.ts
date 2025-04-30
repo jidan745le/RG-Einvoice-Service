@@ -604,7 +604,7 @@ export class InvoiceService {
         submittedBy,
       });
 
-      const savedRedInvoice = await this.invoiceRepository.save(redInvoice);
+      // const savedRedInvoice = await this.invoiceRepository.save(redInvoice);
 
       // // Copy invoice details
       // const redInvoiceDetails = originalInvoice.invoiceDetails.map(detail =>
@@ -629,7 +629,7 @@ export class InvoiceService {
         message: 'Red invoice submitted successfully',
         data: {
           orderNo,
-          redInvoiceId: savedRedInvoice.id,
+          redInvoiceId: redInvoice?.id,
           result
         }
       };
