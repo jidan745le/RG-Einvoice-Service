@@ -29,33 +29,33 @@ export class EpicorService {
   async syncInvoices(lastSyncDate?: Date): Promise<EpicorResponse> {
     try {
       this.logger.log(`Syncing invoices from Epicor since ${lastSyncDate?.toISOString() || 'all'}`);
-      
+
       // Build URL for the Epicor API
-      const url = `${this.config.baseUrl}/BaqSvc/InvReport(SIMALFA)`;
-      
+      const url = `${this.config.baseUrl}/BaqSvc/InvReport(TC)`;
+
       // Add filter for incremental sync if lastSyncDate is provided
       let filter = '';
       if (lastSyncDate) {
         const formattedDate = lastSyncDate.toISOString();
         filter = `?$filter=OrderHed_OrderDate gt datetime'${formattedDate}'`;
       }
-      
+
       // Set authorization headers
       const headers = {
         'Content-Type': 'application/json',
         'Authorization': `Basic ${Buffer.from(`${this.config.username}:${this.config.password}`).toString('base64')}`,
       };
-      
+
       // If API key is provided, add it to headers
       if (this.config.apiKey) {
         headers['X-API-Key'] = this.config.apiKey;
       }
-      
+
       // Send HTTP request
       const response = await lastValueFrom(
         this.httpService.get<EpicorResponse>(`${url}${filter}`, { headers })
       );
-      
+
       this.logger.log(`Retrieved ${response.data.value.length} invoices from Epicor`);
       this.logger.log(response.data)
       return response.data;

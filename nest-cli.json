@@ -6,7 +6,8 @@
     "deleteOutDir": true,
     "assets": [
       "**/*.env",
-      "**/*.xlsx"
+      "**/*.xlsx",
+      "scripts/*.ts"
     ]
   }
 }

@@ -66,6 +66,7 @@ export class InvoiceController {
   }
 
   @Post('sync')
+  @Public()
   @HttpCode(HttpStatus.OK)
   async syncFromEpicor() {
     this.logger.log('Starting sync from Epicor');

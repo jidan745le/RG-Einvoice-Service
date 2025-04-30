@@ -11,7 +11,8 @@ import { Invoice } from './modules/invoice/entities/invoice.entity';
 import { InvoiceDetail } from './modules/invoice/entities/invoice-detail.entity';
 import * as path from 'path';
 import { ExcelModule } from './modules/excel/excel.module';
-
+import { DatabaseCleanupModule } from './modules/database/database-cleanup.module';
+const isDev = process.env.NODE_ENV === 'development';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -23,11 +24,11 @@ import { ExcelModule } from './modules/excel/excel.module';
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
         type: 'mysql',
-        host: configService.get('DB_HOST', 'localhost'),
-        port: configService.get<number>('DB_PORT', 3306),
-        username: configService.get('DB_USERNAME', ''),
-        password: configService.get('DB_PASSWORD', ''),
-        database: configService.get('DB_DATABASE', ''),
+        host: configService.get(isDev ? 'DB_HOST_DEV' : 'DB_HOST', 'localhost'),
+        port: configService.get<number>(isDev ? 'DB_PORT_DEV' : 'DB_PORT', 3306),
+        username: configService.get(isDev ? 'DB_USERNAME_DEV' : 'DB_USERNAME', 'root'),
+        password: configService.get(isDev ? 'DB_PASSWORD_DEV' : 'DB_PASSWORD', '123456'),
+        database: configService.get(isDev ? 'DB_DATABASE_DEV' : 'DB_DATABASE', 'einvoice'),
         entities: [Invoice, InvoiceDetail],
         synchronize: configService.get<boolean>('DB_SYNCHRONIZE', true),
         logging: configService.get<boolean>('DB_LOGGING', false),
@@ -38,6 +39,7 @@ import { ExcelModule } from './modules/excel/excel.module';
     EpicorModule,
     AuthModule,
     ExcelModule,
+    DatabaseCleanupModule,
   ],
   controllers: [AppController],
   providers: [AppService],

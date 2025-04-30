@@ -17,7 +17,13 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "cleanup:date": "ts-node --require crypto-browserify -r tsconfig-paths/register src/scripts/cleanup.ts date",
+    "cleanup:status": "ts-node --require crypto-browserify -r tsconfig-paths/register src/scripts/cleanup.ts status",
+    "cleanup:all": "ts-node --require crypto-browserify -r tsconfig-paths/register src/scripts/cleanup.ts all",
+    "cleanup:direct": "ts-node src/scripts/directCleanup.ts",
+    "cleanup:direct:prod": "ts-node scripts/directCleanup.ts"
+
   },
   "dependencies": {
     "@nestjs/axios": "^4.0.0",
