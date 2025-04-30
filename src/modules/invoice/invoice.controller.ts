@@ -86,7 +86,7 @@ export class InvoiceController {
     return this.invoiceService.submitRedInvoice(parseInt(id), submittedBy);
   }
 
-  @Post(':id/red/callback')
+  @Post('/red/callback')
   @Public()
   @HttpCode(HttpStatus.OK)
   async redCallback(@Body() callbackData: any) {
