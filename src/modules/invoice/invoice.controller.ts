@@ -15,6 +15,7 @@ import { QueryInvoiceDto } from './dto/query-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { InvoiceService } from './invoice.service';
 import { RedInvoiceRequestDto } from './dto/red-invoice.dto';
+import { Public } from '../auth/decorators/public.decorator';
 
 @Controller("invoice")
 export class InvoiceController {
@@ -57,6 +58,7 @@ export class InvoiceController {
   }
 
   @Post('callback')
+  @Public()
   @HttpCode(HttpStatus.OK)
   async callback(@Body() callbackData: any) {
     this.logger.log(`Received callback: ${JSON.stringify(callbackData)}`);
@@ -85,6 +87,7 @@ export class InvoiceController {
   }
 
   @Post(':id/red/callback')
+  @Public()
   @HttpCode(HttpStatus.OK)
   async redCallback(@Body() callbackData: any) {
     return this.invoiceService.processRedInfoCallback(callbackData);
