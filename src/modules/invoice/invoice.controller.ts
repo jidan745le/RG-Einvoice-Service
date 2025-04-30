@@ -79,6 +79,7 @@ export class InvoiceController {
    * @returns Result of red invoice submission
    */
   @Post(':id/red')
+  @HttpCode(HttpStatus.OK)
   async submitRedInvoice(
     @Param('id') id: string,
     @Body('submittedBy') submittedBy: string,
