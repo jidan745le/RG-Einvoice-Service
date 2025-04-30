@@ -96,8 +96,8 @@ async function cleanupAllData(batchSize: number = 1000): Promise<{ invoices: num
 
         logOperation(`Cleanup completed. Deleted ${totalInvoices} invoices and ${totalDetails} invoice details`);
         return { invoices: totalInvoices, details: totalDetails };
-    } catch (error) {
-        logOperation(`Error during cleanup: ${error.message}`);
+    } catch (error: any) {
+        logOperation(`Error during cleanup: ${error.message || String(error)}`);
         throw error;
     }
 }
@@ -114,8 +114,8 @@ async function bootstrap() {
 
         const result = await cleanupAllData();
         console.log(`删除完成: 删除了 ${result.invoices} 张发票和 ${result.details} 条发票明细`);
-    } catch (error) {
-        console.error('删除过程中出错:', error);
+    } catch (error: any) {
+        console.error('删除过程中出错:', error.message || String(error));
         process.exit(1);
     }
 }
