@@ -45,10 +45,21 @@ export class AuthGuard implements CanActivate {
             // Get current application identifier from config
             const currentAppId = this.configService.get<string>('APP_ID', 'einvoice');
 
+            // Add logging to debug 403 issue
+            console.log('DEBUG - Auth check:', {
+                currentAppId,
+                userSubApps: request.user.subApplications,
+                hasSubApps: !!request.user.subApplications,
+                isArray: Array.isArray(request.user.subApplications),
+                subAppCodes: request.user.subApplications ? request.user.subApplications.map((app: any) => app?.code) : [],
+                includes: request.user.subApplications ?
+                    request.user.subApplications.map((app: any) => app?.code).includes(currentAppId) : false
+            });
+
             // Check if user has access to this application
             if (request.user.subApplications &&
                 Array.isArray(request.user.subApplications) &&
-                !request.user.subApplications.includes(currentAppId)) {
+                !request.user.subApplications.map((app: any) => app?.code).includes(currentAppId)) {
                 throw new HttpException('Access to this application is forbidden', HttpStatus.FORBIDDEN);
             }
 
