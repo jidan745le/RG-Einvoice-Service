@@ -2,12 +2,14 @@ import { Injectable, CanActivate, ExecutionContext, UnauthorizedException, HttpE
 import { AuthService } from './auth.service';
 import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC_KEY } from './decorators/public.decorator';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class AuthGuard implements CanActivate {
     constructor(
         private readonly authService: AuthService,
         private readonly reflector: Reflector,
+        private readonly configService: ConfigService,
     ) { }
 
     async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -40,10 +42,20 @@ export class AuthGuard implements CanActivate {
             // Add user data to request object for controllers to use
             request.user = authData.user;
 
+            // Get current application identifier from config
+            const currentAppId = this.configService.get<string>('APP_ID', 'einvoice');
+
+            // Check if user has access to this application
+            if (request.user.subApplications &&
+                Array.isArray(request.user.subApplications) &&
+                !request.user.subApplications.includes(currentAppId)) {
+                throw new HttpException('Access to this application is forbidden', HttpStatus.FORBIDDEN);
+            }
+
             return true;
         } catch (error) {
-            // If error is already an HttpException with 401, just rethrow it
-            if (error instanceof HttpException && error.getStatus() === HttpStatus.UNAUTHORIZED) {
+            // If error is already an HttpException, just rethrow it
+            if (error instanceof HttpException) {
                 throw error;
             }
 
