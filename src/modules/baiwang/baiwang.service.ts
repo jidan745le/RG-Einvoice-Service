@@ -1,20 +1,25 @@
-import { HttpException, HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable, Logger, Scope } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { v4 as uuidv4 } from 'uuid';
 import * as CryptoJS from 'crypto-js';
 import { lastValueFrom } from 'rxjs';
 import { BaiwangConfig, BaiwangInvoiceRequest, BaiwangResponse, BaiwangRedInvoiceRequest, BaiwangRedInvoiceResponse } from './interfaces/baiwang.interface';
+import { TenantConfigService } from '../tenant/tenant-config.service';
 
-@Injectable()
+@Injectable({ scope: Scope.REQUEST })
 export class BaiwangService {
   private readonly logger = new Logger(BaiwangService.name);
-  private readonly config: BaiwangConfig;
+  private config: BaiwangConfig;
+  private tenantId: string;
+  private authorization: string;
 
   constructor(
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
+    private readonly tenantConfigService: TenantConfigService,
   ) {
+    // 默认初始化为环境变量配置，后续可通过initialize方法更新
     this.config = {
       apiName: this.configService.get<string>('BAIWANG_API_NAME', 'baiwang.s.outputinvoice.invoice'),
       appKey: this.configService.get<string>('BAIWANG_APP_KEY', ''),
@@ -23,6 +28,18 @@ export class BaiwangService {
       baseUrl: this.configService.get<string>('BAIWANG_BASE_URL', 'https://sandbox-openapi.baiwang.com/router/rest'),
       version: this.configService.get<string>('BAIWANG_VERSION', '6.0'),
     };
+  }
+
+  /**
+   * 初始化百望配置
+   * @param tenantId 租户ID
+   * @param authorization 认证头信息
+   */
+  async initialize(tenantId: string, authorization?: string): Promise<void> {
+    this.tenantId = tenantId;
+    this.authorization = authorization || '';
+    this.config = await this.tenantConfigService.getBaiwangConfig(tenantId, authorization);
+    this.logger.log(`Initialized Baiwang service for tenant: ${tenantId}`);
   }
 
   /**

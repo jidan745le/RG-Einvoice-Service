@@ -9,6 +9,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
 } from '@nestjs/common';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { QueryInvoiceDto } from './dto/query-invoice.dto';
@@ -17,6 +18,16 @@ import { InvoiceService } from './invoice.service';
 import { RedInvoiceRequestDto } from './dto/red-invoice.dto';
 import { Public } from '../auth/decorators/public.decorator';
 import { MergeInvoicesDto } from './dto/merge-invoices.dto';
+import { Request } from 'express';
+
+// 扩展 Request 类型以包含 user 属性
+interface RequestWithUser extends Request {
+  user?: {
+    id?: string;
+    tenantId?: string;
+    [key: string]: any;
+  };
+}
 
 @Controller("invoice")
 export class InvoiceController {
@@ -48,14 +59,24 @@ export class InvoiceController {
     return this.invoiceService.update(+id, updateInvoiceDto);
   }
 
+  /**
+   * Submit invoice for e-invoicing
+   * @param id Invoice ID
+   * @param submittedBy User who submitted the invoice
+   * @returns Result of submission
+   */
   @Post(':id/submit')
   @HttpCode(HttpStatus.OK)
-  async submit(
-    @Param('id') id: string,
+  async submitInvoice(
+    @Param('id') id: number,
     @Body('submittedBy') submittedBy: string,
+    @Req() request: RequestWithUser
   ) {
-    this.logger.log(`Submitting invoice ${id} by ${submittedBy}`);
-    return this.invoiceService.submitInvoice(+id, submittedBy);
+    // 从请求中获取租户ID和认证头
+    const tenantId = request.user?.tenantId || 'default';
+    const authorization = request.headers.authorization;
+    this.logger.log(`Submitting invoice ${id} by ${submittedBy} for tenant ${tenantId}`);
+    return this.invoiceService.submitInvoice(+id, submittedBy, tenantId, authorization);
   }
 
   @Post('callback')
@@ -75,7 +96,7 @@ export class InvoiceController {
   }
 
   /**
-   * Submit red invoice request
+   * Submit red invoice for e-invoicing
    * @param id Original invoice ID
    * @param submittedBy User who submitted the red invoice
    * @returns Result of red invoice submission
@@ -83,10 +104,15 @@ export class InvoiceController {
   @Post(':id/red')
   @HttpCode(HttpStatus.OK)
   async submitRedInvoice(
-    @Param('id') id: string,
+    @Param('id') id: number,
     @Body('submittedBy') submittedBy: string,
+    @Req() request: RequestWithUser
   ) {
-    return this.invoiceService.submitRedInvoice(parseInt(id), submittedBy);
+    // 从请求中获取租户ID和认证头
+    const tenantId = request.user?.tenantId || 'default';
+    const authorization = request.headers.authorization;
+    this.logger.log(`Submitting red invoice for ${id} by ${submittedBy} for tenant ${tenantId}`);
+    return this.invoiceService.submitRedInvoice(+id, submittedBy, tenantId, authorization);
   }
 
   @Post('/red/callback')
@@ -103,8 +129,14 @@ export class InvoiceController {
    */
   @Post('/merge')
   @HttpCode(HttpStatus.OK)
-  async mergeInvoices(@Body() mergeDto: MergeInvoicesDto) {
-    this.logger.log(`Merging invoices: ${mergeDto.erpInvoiceIds.join(', ')} by ${mergeDto.submittedBy}`);
-    return this.invoiceService.mergeAndSubmitInvoices(mergeDto);
+  async mergeInvoices(
+    @Body() mergeDto: MergeInvoicesDto,
+    @Req() request: RequestWithUser
+  ) {
+    // 从请求中获取租户ID和认证头
+    const tenantId = request.user?.tenantId || 'default';
+    const authorization = request.headers.authorization;
+    this.logger.log(`Merging invoices: ${mergeDto.erpInvoiceIds.join(', ')} by ${mergeDto.submittedBy} for tenant ${tenantId}`);
+    return this.invoiceService.mergeAndSubmitInvoices(mergeDto, tenantId, authorization);
   }
 }

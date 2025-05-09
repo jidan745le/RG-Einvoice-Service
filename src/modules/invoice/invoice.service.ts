@@ -10,6 +10,7 @@ import { BaiwangService } from '../baiwang/baiwang.service';
 import { EpicorService } from '../epicor/epicor.service';
 import { v4 as uuidv4 } from 'uuid';
 import { EpicorInvoice } from '../epicor/interfaces/epicor.interface';
+import { TenantConfigService } from '../tenant/tenant-config.service';
 
 @Injectable()
 export class InvoiceService {
@@ -22,6 +23,7 @@ export class InvoiceService {
     private readonly invoiceDetailRepository: Repository<InvoiceDetail>,
     private readonly baiwangService: BaiwangService,
     private readonly epicorService: EpicorService,
+    private readonly tenantConfigService: TenantConfigService,
   ) { }
 
   /**
@@ -254,11 +256,16 @@ export class InvoiceService {
    * Submit invoice to Baiwang for e-invoicing
    * @param id Invoice ID
    * @param submittedBy User who submitted the invoice
+   * @param tenantId Tenant ID
+   * @param authorization Authorization header from request
    * @returns Result of submission
    */
-  async submitInvoice(id: number, submittedBy: string): Promise<any> {
+  async submitInvoice(id: number, submittedBy: string, tenantId: string = 'default', authorization?: string): Promise<any> {
     try {
-      // Get invoice and details
+      // 初始化百望服务，获取租户特定配置
+      await this.baiwangService.initialize(tenantId, authorization);
+
+      // 获取发票和明细
       const invoice = await this.findOne(id);
       const details = await this.invoiceDetailRepository.find({
         where: {
@@ -271,6 +278,9 @@ export class InvoiceService {
       if (!details.length) {
         throw new Error('Cannot submit invoice without details');
       }
+
+      // 获取公司信息配置
+      const companyInfo = await this.tenantConfigService.getCompanyInfo(tenantId, authorization);
 
       // Generate order number using UUID (shortened) and include erpInvoiceId for easier retrieval in callback
       const orderNo = `ORD-${uuidv4().substring(0, 8)}-${invoice.erpInvoiceId}`;
@@ -291,16 +301,16 @@ export class InvoiceService {
         priceTaxMark: '0',
         callBackUrl: 'http://8.219.189.158:81/e-invoice/api/invoice/callback',
         invoiceDetailList,
-        sellerAddress: 'Environment issue immediately',
+        sellerAddress: companyInfo.address || 'Environment issue immediately',
         buyerAddress: 'Test address',
         buyerBankName: 'Test bank name',
         invoiceType: '1',
-        taxNo: '338888888888SMB',
+        taxNo: companyInfo.taxNo || '338888888888SMB',
         orderDateTime: new Date().toISOString().split('T')[0] + ' 10:00:00',
         orderNo,
         buyerName: invoice.customerName || 'Test Company',
         invoiceTypeCode: '02',
-        sellerBankName: 'Test Bank',
+        sellerBankName: companyInfo.bankName || 'Test Bank',
         remarks: invoice.invoiceComment || 'Invoice',
       };
 
@@ -572,10 +582,18 @@ export class InvoiceService {
    * Submit red invoice request to Baiwang
    * @param id Original invoice ID
    * @param submittedBy User who submitted the red invoice
+   * @param tenantId Tenant ID
+   * @param authorization Authorization header from request
    * @returns Result of red invoice submission
    */
-  async submitRedInvoice(id: number, submittedBy: string): Promise<any> {
+  async submitRedInvoice(id: number, submittedBy: string, tenantId: string = 'default', authorization?: string): Promise<any> {
     try {
+      // 初始化百望服务，获取租户特定配置
+      await this.baiwangService.initialize(tenantId, authorization);
+
+      // 获取公司信息配置
+      const companyInfo = await this.tenantConfigService.getCompanyInfo(tenantId, authorization);
+
       // Get original invoice
       const originalInvoice = await this.findOne(id);
       if (!originalInvoice) {
@@ -587,7 +605,7 @@ export class InvoiceService {
 
       // Prepare red invoice request
       const request = {
-        taxNo: '338888888888SMB', // This should be configurable
+        taxNo: companyInfo.taxNo || '338888888888SMB',
         orderNo,
         originalSerialNo: originalInvoice.eInvoiceId,
         originalOrderNo: originalInvoice.orderNumber,
@@ -731,10 +749,18 @@ export class InvoiceService {
   /**
    * 合并发票并提交到百望
    * @param mergeDto 包含要合并的发票ID和提交人
+   * @param tenantId 租户ID
+   * @param authorization Authorization header from request
    * @returns 合并结果
    */
-  async mergeAndSubmitInvoices(mergeDto: { erpInvoiceIds: number[]; submittedBy: string }): Promise<any> {
+  async mergeAndSubmitInvoices(mergeDto: { erpInvoiceIds: number[]; submittedBy: string }, tenantId: string = 'default', authorization?: string): Promise<any> {
     try {
+      // 初始化百望服务，获取租户特定配置
+      await this.baiwangService.initialize(tenantId, authorization);
+
+      // 获取公司信息配置
+      const companyInfo = await this.tenantConfigService.getCompanyInfo(tenantId, authorization);
+
       const { erpInvoiceIds, submittedBy } = mergeDto;
       this.logger.log(`Merging invoices: ${erpInvoiceIds.join(', ')} by ${submittedBy}`);
 
@@ -797,16 +823,16 @@ export class InvoiceService {
         priceTaxMark: '0',
         callBackUrl: 'http://8.219.189.158:81/e-invoice/api/invoice/callback',
         invoiceDetailList: mergedItems,
-        sellerAddress: 'Environment issue immediately',
+        sellerAddress: companyInfo.address || 'Environment issue immediately',
         buyerAddress: 'Test address',
         buyerBankName: 'Test bank name',
         invoiceType: '1',
-        taxNo: '338888888888SMB',
+        taxNo: companyInfo.taxNo || '338888888888SMB',
         orderDateTime: new Date().toISOString().split('T')[0] + ' 10:00:00',
         orderNo,
         buyerName: firstCustomer || 'Test Company',
         invoiceTypeCode: '02',
-        sellerBankName: 'Test Bank',
+        sellerBankName: companyInfo.bankName || 'Test Bank',
         remarks: `Merged invoice for ${erpInvoiceIds.join(', ')}`,
       };
 
