@@ -118,13 +118,13 @@ export class InvoiceService {
     }
 
     if (filters.startDate) {
-      const startDateFilter = 'invoice.postDate >= :startDate';
+      const startDateFilter = 'invoice.orderDate >= :startDate';
       queryBuilder.andWhere(startDateFilter, { startDate: filters.startDate });
       statusQueryBuilder.andWhere(startDateFilter, { startDate: filters.startDate });
     }
 
     if (filters.endDate) {
-      const endDateFilter = 'invoice.postDate <= :endDate';
+      const endDateFilter = 'invoice.orderDate <= :endDate';
       queryBuilder.andWhere(endDateFilter, { endDate: filters.endDate });
       statusQueryBuilder.andWhere(endDateFilter, { endDate: filters.endDate });
     }
