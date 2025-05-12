@@ -11,6 +11,7 @@ import { EpicorService } from '../epicor/epicor.service';
 import { v4 as uuidv4 } from 'uuid';
 import { EpicorInvoice } from '../epicor/interfaces/epicor.interface';
 import { TenantConfigService } from '../tenant/tenant-config.service';
+import { EpicorTenantConfig } from '../epicor/epicor.service';
 
 @Injectable()
 export class InvoiceService {
@@ -66,9 +67,11 @@ export class InvoiceService {
   /**
    * Find all invoices with pagination and filtering
    * @param queryDto Query parameters
+   * @param tenantId Tenant ID
+   * @param authorization Authorization header
    * @returns Paginated list of invoices with details and status totals
    */
-  async findAll(queryDto: QueryInvoiceDto): Promise<{
+  async findAll(queryDto: QueryInvoiceDto, tenantId?: string, authorization?: string): Promise<{
     items: Invoice[];
     total: number;
     page: number;
@@ -83,7 +86,156 @@ export class InvoiceService {
   }> {
     const { page = 1, limit = 10, ...filters } = queryDto;
 
-    // 构建主查询获取分页结果
+    if (filters.fromEpicor) {
+      if (!tenantId || !authorization) {
+        this.logger.error('Tenant ID and Authorization are required when fromEpicor is true.');
+        throw new Error('Tenant ID and Authorization are required for fetching from Epicor.');
+      }
+      try {
+        const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice', authorization);
+        const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
+
+        if (!serverSettings || !serverSettings.serverBaseAPI || !serverSettings.companyID || !serverSettings.userAccount) {
+          this.logger.error('Epicor server settings are missing or incomplete from tenant configuration.');
+          throw new Error('Epicor server configuration is incomplete.');
+        }
+
+        if (serverSettings.password === undefined) {
+          serverSettings.password = '';
+        }
+
+        const filterClauses: string[] = [];
+        if (filters.erpInvoiceId) {
+          // Assuming filters.erpInvoiceId is a string for potential partial match.
+          // Epicor's OData might require specific syntax for casting number to string for contains.
+          // This is an attempt; it might need adjustment based on Epicor's capabilities.
+          filterClauses.push(`contains(cast(InvcHead_InvoiceNum, 'Edm.String'), '${filters.erpInvoiceId}')`);
+        }
+        if (filters.customerName) {
+          filterClauses.push(`contains(Customer_Name, '${filters.customerName}')`);
+        }
+        if (filters.eInvoiceId) {
+          filterClauses.push(`InvcHead_ELIEInvID eq '${filters.eInvoiceId}'`);
+        }
+
+        const formatDate = (dateInput: string | Date): string | null => {
+          if (!dateInput) return null;
+          try {
+            const d = new Date(dateInput);
+            if (isNaN(d.getTime())) return null;
+            return d.toISOString().split('T')[0];
+          } catch { return null; }
+        };
+
+        if (filters.startDate) {
+          const formattedDate = formatDate(filters.startDate);
+          if (formattedDate) {
+            filterClauses.push(`OrderHed_OrderDate ge ${formattedDate}`);
+          }
+        }
+        if (filters.endDate) {
+          const formattedDate = formatDate(filters.endDate);
+          if (formattedDate) {
+            filterClauses.push(`OrderHed_OrderDate le ${formattedDate}`);
+          }
+        }
+        if (filters.fapiaoType) {
+          // Assuming filters.fapiaoType is a number or a string that can be used directly.
+          // If InvcHead_CNTaxInvoiceType is numeric, and filters.fapiaoType is string, it might need conversion or 'eq' might handle it.
+          filterClauses.push(`InvcHead_CNTaxInvoiceType eq ${filters.fapiaoType}`);
+        }
+        if (filters.submittedBy) {
+          filterClauses.push(`InvcHead_ELIEInvUpdatedBy eq '${filters.submittedBy}'`);
+        }
+        // Note: filters.status is intentionally ignored for Epicor queries as per current plan.
+
+        const odataFilterString = filterClauses.join(' and ');
+        this.logger.log(`Constructed OData Filter for Epicor: ${odataFilterString}`);
+
+        const epicorData = await this.epicorService.fetchAllInvoicesFromBaq(
+          serverSettings,
+          {
+            filter: odataFilterString,
+          }
+        );
+
+        const epicorInvoicesRaw = epicorData.value || []; // Ensure it's an array
+
+        // The transformation logic remains largely the same, operating on the fetched page data.
+        const groupedEpicorInvoices = this.groupInvoicesByNumber(epicorInvoicesRaw);
+        const transformedInvoices: Invoice[] = [];
+        for (const invoiceNumStr in groupedEpicorInvoices) {
+          const invoiceDetailsRaw = groupedEpicorInvoices[invoiceNumStr];
+          const firstDetailRaw = invoiceDetailsRaw[0];
+
+          const invoice = new Invoice();
+          invoice.erpInvoiceId = firstDetailRaw.InvcHead_InvoiceNum;
+          invoice.erpInvoiceDescription = firstDetailRaw.InvcHead_Description;
+          invoice.fapiaoType = firstDetailRaw.InvcHead_CNTaxInvoiceType?.toString() || '';
+          invoice.customerName = firstDetailRaw.Customer_Name;
+          invoice.customerResaleId = firstDetailRaw.Customer_ResaleID;
+          invoice.invoiceComment = firstDetailRaw.InvcHead_InvoiceComment;
+          invoice.orderNumber = firstDetailRaw.OrderHed_OrderNum?.toString() || '';
+          invoice.orderDate = firstDetailRaw.OrderHed_OrderDate && firstDetailRaw.OrderHed_OrderDate.trim() !== '' ? new Date(firstDetailRaw.OrderHed_OrderDate) : null;
+          invoice.poNumber = firstDetailRaw.OrderHed_PONum || '';
+          invoice.status = 'FROM_EPICOR';
+          invoice.id = firstDetailRaw.InvcHead_InvoiceNum;
+          invoice.createdAt = firstDetailRaw.OrderHed_OrderDate ? new Date(firstDetailRaw.OrderHed_OrderDate) : new Date(); // Using OrderDate as a proxy for creation for sorting
+          invoice.updatedAt = firstDetailRaw.InvcHead_ELIEInvUpdatedOn ? new Date(firstDetailRaw.InvcHead_ELIEInvUpdatedOn) : new Date();
+
+
+          invoice.invoiceDetails = invoiceDetailsRaw.map(detailRaw => {
+            const detail = new InvoiceDetail();
+            detail.erpInvoiceId = detailRaw.InvcDtl_InvoiceNum;
+            detail.lineDescription = detailRaw.InvcDtl_LineDesc || '';
+            detail.commodityCode = detailRaw.InvcDtl_CommodityCode || '';
+            detail.uomDescription = detailRaw.UOMClass_Description || '';
+            detail.salesUm = detailRaw.InvcDtl_SalesUM || '';
+            detail.sellingShipQty = parseFloat(detailRaw.InvcDtl_SellingShipQty || "0") || 0;
+            detail.docUnitPrice = parseFloat(detailRaw.InvcDtl_DocUnitPrice || "0") || 0;
+            detail.docExtPrice = parseFloat(detailRaw.InvcDtl_DocExtPrice || "0") || 0;
+            detail.taxPercent = parseFloat(detailRaw.InvcTax_Percent || "0") || 0;
+            detail.id = parseInt(`${firstDetailRaw.InvcHead_InvoiceNum}${detailRaw.RowIdent?.substring(0, 6) || Math.random().toString(36).substring(2, 8)}`, 36);
+            detail.invoiceId = invoice.id;
+            return detail;
+          });
+          transformedInvoices.push(invoice);
+        }
+
+        // Sorting is now on the current page's data. For global sorting, OData $orderby should be used.
+        transformedInvoices.sort((a, b) => (b.orderDate?.getTime() || 0) - (a.orderDate?.getTime() || 0)); // Example sort by date
+
+        const totalItems = epicorData['@odata.count'] !== undefined ? epicorData['@odata.count'] : transformedInvoices.length;
+        // If @odata.count is undefined and transformedInvoices.length is used, it's only the current page count if top/skip was effective.
+
+        return {
+          items: transformedInvoices.slice((page - 1) * limit, page * limit), // This is now the paginated set from server
+          total: totalItems,
+          page,
+          limit,
+          totals: {
+            PENDING: 0,
+            SUBMITTED: 0,
+            ERROR: 0,
+            RED_NOTE: 0,
+            TOTAL: totalItems,
+          },
+        };
+
+      } catch (error) {
+        this.logger.error(`Error fetching or processing invoices from Epicor: ${error.message}`, error.stack);
+        // Return empty or error structure
+        return {
+          items: [],
+          total: 0,
+          page,
+          limit,
+          totals: { PENDING: 0, SUBMITTED: 0, ERROR: 0, RED_NOTE: 0, TOTAL: 0 },
+        };
+      }
+    }
+
+    // Original logic for fetching from local DB
     const queryBuilder = this.invoiceRepository.createQueryBuilder('invoice')
       .leftJoinAndSelect('invoice.invoiceDetails', 'invoiceDetails');
 
@@ -507,9 +659,9 @@ export class InvoiceService {
             customerName: firstInvoice.Customer_Name,
             customerResaleId: firstInvoice.Customer_ResaleID,
             invoiceComment: firstInvoice.InvcHead_InvoiceComment,
-            orderNumber: firstInvoice.OrderHed_OrderNum?.toString(),
-            orderDate: new Date(firstInvoice.OrderHed_OrderDate),
-            poNumber: firstInvoice.OrderHed_PONum,
+            orderNumber: firstInvoice.OrderHed_OrderNum?.toString() || '',
+            orderDate: firstInvoice.OrderHed_OrderDate ? new Date(firstInvoice.OrderHed_OrderDate) : null,
+            poNumber: firstInvoice.OrderHed_PONum || '',
             status: 'PENDING',
           });
 
@@ -520,14 +672,14 @@ export class InvoiceService {
             pendingInsertedInvoiceDetails.push(this.invoiceDetailRepository.create({
               invoiceId: savedInvoice.id,
               erpInvoiceId: detail.InvcDtl_InvoiceNum,
-              lineDescription: detail.InvcDtl_LineDesc,
-              commodityCode: detail.InvcDtl_CommodityCode,
-              uomDescription: detail.UOMClass_Description,
-              salesUm: detail.InvcDtl_SalesUM,
-              sellingShipQty: parseFloat(detail.InvcDtl_SellingShipQty),
-              docUnitPrice: parseFloat(detail.InvcDtl_DocUnitPrice),
-              docExtPrice: parseFloat(detail.InvcDtl_DocExtPrice),
-              taxPercent: parseFloat(detail.InvcTax_Percent),
+              lineDescription: detail.InvcDtl_LineDesc || '',
+              commodityCode: detail.InvcDtl_CommodityCode || '',
+              uomDescription: detail.UOMClass_Description || '',
+              salesUm: detail.InvcDtl_SalesUM || '',
+              sellingShipQty: parseFloat(detail.InvcDtl_SellingShipQty || "0") || 0,
+              docUnitPrice: parseFloat(detail.InvcDtl_DocUnitPrice || "0") || 0,
+              docExtPrice: parseFloat(detail.InvcDtl_DocExtPrice || "0") || 0,
+              taxPercent: parseFloat(detail.InvcTax_Percent || "0") || 0,
             }));
           }
           await this.invoiceDetailRepository.save(pendingInsertedInvoiceDetails);

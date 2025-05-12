@@ -42,8 +42,18 @@ export class InvoiceController {
   }
 
   @Get()
-  async findAll(@Query() queryDto: QueryInvoiceDto) {
-    return this.invoiceService.findAll(queryDto);
+  async findAll(@Query() queryDto: QueryInvoiceDto, @Req() request: RequestWithUser) {
+    const tenantId = request.user?.tenantId;
+    const authorization = request.headers.authorization;
+
+    if (!tenantId) {
+      this.logger.warn('Tenant ID not found in request for findAll');
+      // Or throw new BadRequestException('Tenant ID is required'); depending on desired behavior
+    }
+    // Authorization might be optional for some findAll scenarios, but required if fromEpicor is true
+    // and tenantConfigService.getAppConfig needs it.
+
+    return this.invoiceService.findAll(queryDto, tenantId, authorization);
   }
 
   @Get(':id')

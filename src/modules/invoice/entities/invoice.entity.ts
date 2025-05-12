@@ -52,7 +52,7 @@ export class Invoice {
   submittedBy: string;
 
   @Column({ name: 'order_date', type: 'date', nullable: true })
-  orderDate: Date;
+  orderDate: Date | null;
 
   @Column({ name: 'po_number', nullable: true })
   poNumber: string;

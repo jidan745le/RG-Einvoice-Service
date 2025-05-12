@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsNumber, IsDateString } from 'class-validator';
+import { IsOptional, IsString, IsNumber, IsDateString, IsBoolean } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class QueryInvoiceDto {
@@ -7,10 +7,17 @@ export class QueryInvoiceDto {
   @Type(() => Number)
   page?: number = 1;
 
+
+
   @IsOptional()
   @IsNumber()
   @Type(() => Number)
   limit?: number = 10;
+
+  @IsOptional()
+  @IsBoolean()
+  @Type(() => Boolean)
+  fromEpicor?: boolean = false;
 
   @IsOptional()
   @IsNumber()
