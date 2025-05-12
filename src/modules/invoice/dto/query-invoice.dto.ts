@@ -51,4 +51,8 @@ export class QueryInvoiceDto {
   @IsOptional()
   @IsString()
   submittedBy?: string;
+
+  @IsOptional()
+  @IsString()
+  invoiceComment?: string;
 } 

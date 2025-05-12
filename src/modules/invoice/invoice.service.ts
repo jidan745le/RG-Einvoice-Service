@@ -156,6 +156,9 @@ export class InvoiceService {
         }
         // Note: filters.status is intentionally ignored for Epicor queries as per current plan.
 
+        if (filters.invoiceComment) {
+          filterClauses.push(`substringof(InvcHead_InvoiceComment, '${filters.invoiceComment}')`);
+        }
         const odataFilterString = filterClauses.join(' and ');
         this.logger.log(`Constructed OData Filter for Epicor: ${odataFilterString}`);
 
