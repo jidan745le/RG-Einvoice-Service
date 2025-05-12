@@ -44,12 +44,12 @@ export class InvoiceController {
 
   @Get()
   async findAll(@Query() queryDto: QueryInvoiceDto, @Req() request: RequestWithUser) {
-    const tenantId = request.user?.tenantId;
+    const tenantId = request.user?.tenant?.id;
     const authorization = request.headers.authorization;
 
     // If trying to fetch from Epicor, ensure both tenantId and authorization are available
     if (queryDto.fromEpicor === true) {
-      console.log(authorization, tenantId, request.user, 'authorization, tenantId');
+      console.log(authorization, tenantId, 'authorization, tenantId');
       if (!tenantId || !authorization) {
         this.logger.error('Tenant ID and Authorization are required when fromEpicor is true');
         throw new BadRequestException('Tenant ID and Authorization are required for fetching from Epicor');
