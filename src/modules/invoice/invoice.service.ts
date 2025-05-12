@@ -106,13 +106,20 @@ export class InvoiceService {
 
         const filterClauses: string[] = [];
         if (filters.erpInvoiceId) {
-          // Assuming filters.erpInvoiceId is a string for potential partial match.
-          // Epicor's OData might require specific syntax for casting number to string for contains.
-          // This is an attempt; it might need adjustment based on Epicor's capabilities.
-          filterClauses.push(`contains(cast(InvcHead_InvoiceNum, 'Edm.String'), '${filters.erpInvoiceId}')`);
+          try {
+            // Parse the input as a number for exact matching
+            const numValue = Number(filters.erpInvoiceId);
+            if (!isNaN(numValue)) {
+              // Use string concatenation with explicit string conversion
+              filterClauses.push('InvcHead_InvoiceNum eq ' + numValue.toString());
+            }
+          } catch (e) {
+            // If parsing fails, skip this filter
+            this.logger.warn(`Could not parse erpInvoiceId filter "${filters.erpInvoiceId}" as a number`);
+          }
         }
         if (filters.customerName) {
-          filterClauses.push(`contains(Customer_Name, '${filters.customerName}')`);
+          filterClauses.push(`substringof('${filters.customerName}', Customer_Name)`);
         }
         if (filters.eInvoiceId) {
           filterClauses.push(`InvcHead_ELIEInvID eq '${filters.eInvoiceId}'`);
@@ -123,20 +130,20 @@ export class InvoiceService {
           try {
             const d = new Date(dateInput);
             if (isNaN(d.getTime())) return null;
-            return d.toISOString().split('T')[0];
+            return d.toISOString().split('T')[0]; // 'YYYY-MM-DD'
           } catch { return null; }
         };
 
         if (filters.startDate) {
           const formattedDate = formatDate(filters.startDate);
           if (formattedDate) {
-            filterClauses.push(`OrderHed_OrderDate ge ${formattedDate}`);
+            filterClauses.push(`OrderHed_OrderDate ge datetime'${formattedDate}'`);
           }
         }
         if (filters.endDate) {
           const formattedDate = formatDate(filters.endDate);
           if (formattedDate) {
-            filterClauses.push(`OrderHed_OrderDate le ${formattedDate}`);
+            filterClauses.push(`OrderHed_OrderDate le datetime'${formattedDate}'`);
           }
         }
         if (filters.fapiaoType) {
