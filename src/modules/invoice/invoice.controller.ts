@@ -10,6 +10,7 @@ import {
   Post,
   Query,
   Req,
+  BadRequestException,
 } from '@nestjs/common';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { QueryInvoiceDto } from './dto/query-invoice.dto';
@@ -46,12 +47,17 @@ export class InvoiceController {
     const tenantId = request.user?.tenantId;
     const authorization = request.headers.authorization;
 
-    if (!tenantId) {
+    // If trying to fetch from Epicor, ensure both tenantId and authorization are available
+    if (queryDto.fromEpicor === true) {
+      console.log(authorization, tenantId, request.user, 'authorization, tenantId');
+      if (!tenantId || !authorization) {
+        this.logger.error('Tenant ID and Authorization are required when fromEpicor is true');
+        throw new BadRequestException('Tenant ID and Authorization are required for fetching from Epicor');
+      }
+    } else if (!tenantId) {
+      // For non-Epicor queries, just log a warning if tenantId is missing
       this.logger.warn('Tenant ID not found in request for findAll');
-      // Or throw new BadRequestException('Tenant ID is required'); depending on desired behavior
     }
-    // Authorization might be optional for some findAll scenarios, but required if fromEpicor is true
-    // and tenantConfigService.getAppConfig needs it.
 
     return this.invoiceService.findAll(queryDto, tenantId, authorization);
   }
