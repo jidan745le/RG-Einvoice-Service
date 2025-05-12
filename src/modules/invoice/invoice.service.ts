@@ -119,7 +119,7 @@ export class InvoiceService {
           }
         }
         if (filters.customerName) {
-          filterClauses.push(`substringof('${filters.customerName}', Customer_Name)`);
+          filterClauses.push(`substringof(Customer_Name, '${filters.customerName}')`);
         }
         if (filters.eInvoiceId) {
           filterClauses.push(`InvcHead_ELIEInvID eq '${filters.eInvoiceId}'`);
@@ -185,7 +185,7 @@ export class InvoiceService {
           invoice.orderNumber = firstDetailRaw.OrderHed_OrderNum?.toString() || '';
           invoice.orderDate = firstDetailRaw.OrderHed_OrderDate && firstDetailRaw.OrderHed_OrderDate.trim() !== '' ? new Date(firstDetailRaw.OrderHed_OrderDate) : null;
           invoice.poNumber = firstDetailRaw.OrderHed_PONum || '';
-          invoice.status = 'FROM_EPICOR';
+          invoice.status = 'PENDING';
           invoice.id = firstDetailRaw.InvcHead_InvoiceNum;
           invoice.createdAt = firstDetailRaw.OrderHed_OrderDate ? new Date(firstDetailRaw.OrderHed_OrderDate) : new Date(); // Using OrderDate as a proxy for creation for sorting
           invoice.updatedAt = firstDetailRaw.InvcHead_ELIEInvUpdatedOn ? new Date(firstDetailRaw.InvcHead_ELIEInvUpdatedOn) : new Date();
@@ -221,10 +221,10 @@ export class InvoiceService {
           page,
           limit,
           totals: {
-            PENDING: 0,
-            SUBMITTED: 0,
-            ERROR: 0,
-            RED_NOTE: 0,
+            PENDING: transformedInvoices.filter(invoice => invoice.status === 'PENDING').length,
+            SUBMITTED: transformedInvoices.filter(invoice => invoice.status === 'SUBMITTED').length,
+            ERROR: transformedInvoices.filter(invoice => invoice.status === 'ERROR').length,
+            RED_NOTE: transformedInvoices.filter(invoice => invoice.status === 'RED_NOTE').length,
             TOTAL: totalItems,
           },
         };
