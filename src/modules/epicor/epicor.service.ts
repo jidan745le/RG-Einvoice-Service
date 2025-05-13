@@ -122,4 +122,23 @@ export class EpicorService {
       throw error;
     }
   }
+
+
+  // async updateInvoiceFromEpicor(invoice: EpicorInvoice): Promise<EpicorInvoice> {
+  //   try {
+  //     const url = `${this.config.baseUrl}/BaqSvc/InvReport(${invoice.InvcHead_InvoiceNum})`;
+  //   } catch (error) {
+  //     this.logger.error(`Error updating invoice in Epicor: ${error.message}`, error.stack);
+  //     throw error;
+  //   }
+  // }
+
+  // async createInvoiceFromEpicor(invoice: EpicorInvoice): Promise<EpicorInvoice> {
+  //   try {
+  //     const url = `${this.config.baseUrl}/BaqSvc/InvReport(${invoice.InvcHead_InvoiceNum})`;
+  //   } catch (error) {
+  //     this.logger.error(`Error creating invoice in Epicor: ${error.message}`, error.stack);
+  //     throw error;
+  //   }
+  // }
 }
