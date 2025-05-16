@@ -155,4 +155,18 @@ export class InvoiceController {
     this.logger.log(`Merging invoices: ${mergeDto.erpInvoiceIds.join(', ')} by ${mergeDto.submittedBy} for tenant ${tenantId}`);
     return this.invoiceService.mergeAndSubmitInvoices(mergeDto, tenantId, authorization);
   }
+
+  /**
+   * 清空所有发票数据并重新同步
+   * @returns 清空和同步结果
+   */
+  @Post('/cleanup-resync')
+  @HttpCode(HttpStatus.OK)
+  async cleanupAndResync(@Req() request: RequestWithUser) {
+    // 从请求中获取租户ID和认证头
+    const tenantId = request.user?.tenantId || 'default';
+    const authorization = request.headers.authorization;
+    this.logger.log(`Starting database cleanup and resync for tenant ${tenantId}`);
+    return this.invoiceService.cleanupAndResync(tenantId, authorization);
+  }
 }

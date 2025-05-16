@@ -1197,4 +1197,128 @@ export class InvoiceService {
       return rest;
     });
   }
+
+  /**
+   * 删除所有发票数据并重新同步
+   * @param tenantId 租户ID
+   * @param authorization Authorization header
+   * @returns 操作结果
+   */
+  async cleanupAndResync(tenantId?: string, authorization?: string): Promise<any> {
+    try {
+      this.logger.log('Starting database cleanup and resync');
+
+      // 1. 删除所有发票明细
+      const deletedDetails = await this.invoiceDetailRepository
+        .createQueryBuilder()
+        .delete()
+        .execute();
+
+      // 2. 删除所有发票
+      const deletedInvoices = await this.invoiceRepository
+        .createQueryBuilder()
+        .delete()
+        .execute();
+
+      this.logger.log(`Deleted ${deletedInvoices.affected || 0} invoices and ${deletedDetails.affected || 0} invoice details`);
+
+      // 3. 重新同步数据
+      let syncResult;
+      if (tenantId && authorization) {
+        // 如果提供了租户ID和授权，使用Epicor直接获取数据
+        this.logger.log('Syncing directly from Epicor with tenant configuration');
+
+        const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice', authorization);
+        const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
+
+        if (!serverSettings || !serverSettings.serverBaseAPI || !serverSettings.companyID || !serverSettings.userAccount) {
+          throw new Error('Epicor server configuration is incomplete');
+        }
+
+        if (serverSettings.password === undefined) {
+          serverSettings.password = '';
+        }
+
+        // 使用更大的数据量获取发票
+        const epicorData = await this.epicorService.fetchAllInvoicesFromBaq(
+          serverSettings,
+          { top: 1000 } // 获取更多数据
+        );
+
+        const epicorInvoicesRaw = epicorData.value || [];
+        const groupedEpicorInvoices = this.groupInvoicesByNumber(epicorInvoicesRaw);
+
+        // 处理每个发票组并保存到数据库
+        const savedInvoices: Array<{ erpInvoiceId: number; status: string }> = [];
+        for (const invoiceNumStr in groupedEpicorInvoices) {
+          try {
+            const invoiceDetailsRaw = groupedEpicorInvoices[invoiceNumStr];
+            const firstDetailRaw = invoiceDetailsRaw[0];
+
+            // 创建发票记录
+            const invoice = this.invoiceRepository.create({
+              erpInvoiceId: firstDetailRaw.InvcHead_InvoiceNum,
+              erpInvoiceDescription: firstDetailRaw.InvcHead_Description,
+              fapiaoType: firstDetailRaw.InvcHead_CNTaxInvoiceType?.toString() || '',
+              customerName: firstDetailRaw.Customer_Name,
+              customerResaleId: firstDetailRaw.Customer_ResaleID,
+              invoiceComment: firstDetailRaw.InvcHead_InvoiceComment,
+              orderNumber: firstDetailRaw.OrderHed_OrderNum?.toString() || '',
+              orderDate: firstDetailRaw.OrderHed_OrderDate && firstDetailRaw.OrderHed_OrderDate.trim() !== '' ? new Date(firstDetailRaw.OrderHed_OrderDate) : null,
+              poNumber: firstDetailRaw.OrderHed_PONum || '',
+              status: 'PENDING',
+            });
+
+            const savedInvoice = await this.invoiceRepository.save(invoice);
+
+            // 创建发票明细
+            const invoiceDetails = invoiceDetailsRaw.map(detailRaw => this.invoiceDetailRepository.create({
+              invoiceId: savedInvoice.id,
+              erpInvoiceId: detailRaw.InvcDtl_InvoiceNum,
+              lineDescription: detailRaw.InvcDtl_LineDesc || '',
+              commodityCode: detailRaw.InvcDtl_CommodityCode || '',
+              uomDescription: detailRaw.UOMClass_Description || '',
+              salesUm: detailRaw.InvcDtl_SalesUM || '',
+              sellingShipQty: parseFloat(detailRaw.InvcDtl_SellingShipQty || "0") || 0,
+              docUnitPrice: parseFloat(detailRaw.InvcDtl_DocUnitPrice || "0") || 0,
+              docExtPrice: parseFloat(detailRaw.InvcDtl_DocExtPrice || "0") || 0,
+              taxPercent: parseFloat(detailRaw.InvcTax_Percent || "0") || 0,
+            }));
+
+            await this.invoiceDetailRepository.save(invoiceDetails);
+
+            savedInvoices.push({
+              erpInvoiceId: savedInvoice.erpInvoiceId,
+              status: 'CREATED',
+            });
+          } catch (error) {
+            this.logger.error(`Error processing invoice ${invoiceNumStr} during resync: ${error.message}`, error.stack);
+          }
+        }
+
+        syncResult = {
+          source: 'epicor',
+          importedCount: savedInvoices.length,
+          invoices: savedInvoices
+        };
+      } else {
+        // 否则使用标准同步接口
+        this.logger.log('Using standard sync method');
+        syncResult = await this.syncFromEpicor();
+      }
+
+      return {
+        success: true,
+        message: 'Database cleanup and resync completed successfully',
+        deletedData: {
+          invoices: deletedInvoices.affected || 0,
+          details: deletedDetails.affected || 0
+        },
+        syncResult
+      };
+    } catch (error) {
+      this.logger.error(`Error during cleanup and resync: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
 }
