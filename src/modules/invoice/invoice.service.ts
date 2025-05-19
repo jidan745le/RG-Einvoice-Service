@@ -310,7 +310,7 @@ export class InvoiceService {
     queryBuilder
       .skip((page - 1) * limit)
       .take(limit)
-      .orderBy('invoice.createdAt', 'DESC');
+      .orderBy('invoice.orderDate', 'DESC');
 
     // 执行分页查询获取列表项
     const items = await queryBuilder.getMany();
