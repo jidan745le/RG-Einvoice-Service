@@ -1332,10 +1332,16 @@ export class InvoiceService {
    * @param tenantId Tenant ID
    * @param authorization Authorization header
    * @param mode Configuration mode (merge or standalone)
+   * @param appCode Application code
    * @returns Application configuration
    */
-  async getConfig(tenantId: string, authorization?: string, mode: 'merge' | 'standalone' = 'merge'): Promise<any> {
-    this.logger.log(`Getting einvoice config for tenant: ${tenantId} with mode: ${mode}`);
+  async getConfig(
+    tenantId: string,
+    authorization?: string,
+    mode: 'merge' | 'standalone' = 'merge',
+    appCode: string = 'einvoice'
+  ): Promise<any> {
+    this.logger.log(`Getting config for app: ${appCode} with mode: ${mode} for tenant: ${tenantId}`);
     try {
       // Get the customer portal URL from the configuration service
       const customerPortalUrl = this.configService.get<string>(
@@ -1350,7 +1356,7 @@ export class InvoiceService {
       // Call the customer portal's app-config endpoint directly with mode parameter
       const response = await lastValueFrom(
         this.httpService.get(
-          `${customerPortalUrl}/app-config?appcode=einvoice&mode=${mode}`,
+          `${customerPortalUrl}/app-config?appcode=${appCode}&mode=${mode}`,
           {
             headers: {
               Authorization: authorization,
@@ -1361,7 +1367,7 @@ export class InvoiceService {
 
       return response.data;
     } catch (error) {
-      this.logger.error(`Failed to get einvoice config: ${error.message}`, error.stack);
+      this.logger.error(`Failed to get config: ${error.message}`, error.stack);
       // Provide a default configuration in case of error
       return {
         settings: {
@@ -1394,10 +1400,16 @@ export class InvoiceService {
    * @param tenantId Tenant ID
    * @param settingsData Configuration data to update
    * @param authorization Authorization header
+   * @param appCode Application code
    * @returns Updated configuration
    */
-  async updateConfig(tenantId: string, settingsData: Record<string, any>, authorization?: string): Promise<any> {
-    this.logger.log(`Updating einvoice config for tenant: ${tenantId}`);
+  async updateConfig(
+    tenantId: string,
+    settingsData: Record<string, any>,
+    authorization?: string,
+    appCode: string = 'einvoice'
+  ): Promise<any> {
+    this.logger.log(`Updating config for app: ${appCode} for tenant: ${tenantId}`);
     try {
       // Get the customer portal URL from the configuration service
       const customerPortalUrl = this.configService.get<string>(
@@ -1412,7 +1424,7 @@ export class InvoiceService {
       // Call the customer portal's app-config endpoint to update the settings
       const response = await lastValueFrom(
         this.httpService.post(
-          `${customerPortalUrl}/app-config?appcode=einvoice`,
+          `${customerPortalUrl}/app-config?appcode=${appCode}`,
           settingsData,
           {
             headers: {
@@ -1424,7 +1436,7 @@ export class InvoiceService {
 
       return response.data;
     } catch (error) {
-      this.logger.error(`Failed to update einvoice config: ${error.message}`, error.stack);
+      this.logger.error(`Failed to update config: ${error.message}`, error.stack);
       throw error;
     }
   }

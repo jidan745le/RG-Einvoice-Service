@@ -66,22 +66,10 @@ export class InvoiceController {
     return this.invoiceService.findAll(queryDto, tenantId, authorization);
   }
 
-  @Get(':id')
-  async findOne(@Param('id') id: string) {
-    return this.invoiceService.findOne(+id);
-  }
-
-  @Patch(':id')
-  async update(
-    @Param('id') id: string,
-    @Body() updateInvoiceDto: UpdateInvoiceDto,
-  ) {
-    return this.invoiceService.update(+id, updateInvoiceDto);
-  }
-
   /**
    * Get einvoice application configuration
    * @param mode Optional configuration mode (merge or standalone)
+   * @param appcode Application code (defaults to 'einvoice')
    * @returns Application configuration
    */
   @Get('config')
@@ -89,6 +77,7 @@ export class InvoiceController {
   async getConfig(
     @Req() request: RequestWithUser,
     @Query('mode') mode?: 'merge' | 'standalone',
+    @Query('appcode') appcode?: string,
   ) {
     try {
       const tenantId = request.user?.tenantId || request.user?.tenant?.id;
@@ -100,9 +89,11 @@ export class InvoiceController {
 
       // Default to merge mode if not specified
       const configMode = mode || 'merge';
+      // Use einvoice as default app code if not specified
+      const appCode = appcode || 'einvoice';
 
-      this.logger.log(`Getting einvoice config with mode ${configMode} for tenant ${tenantId}`);
-      return this.invoiceService.getConfig(tenantId, authorization, configMode);
+      this.logger.log(`Getting config for app: ${appCode} with mode ${configMode} for tenant ${tenantId}`);
+      return this.invoiceService.getConfig(tenantId, authorization, configMode, appCode);
     } catch (error) {
       this.logger.error(`Failed to get config: ${error.message}`, error.stack);
       throw new HttpException(
@@ -115,6 +106,7 @@ export class InvoiceController {
   /**
    * Update einvoice application configuration
    * @param settingsData Configuration data to update
+   * @param appcode Application code (defaults to 'einvoice')
    * @returns Updated configuration
    */
   @Post('config')
@@ -122,6 +114,7 @@ export class InvoiceController {
   async updateConfig(
     @Body() settingsData: Record<string, any>,
     @Req() request: RequestWithUser,
+    @Query('appcode') appcode?: string,
   ) {
     try {
       const tenantId = request.user?.tenantId || request.user?.tenant?.id;
@@ -135,8 +128,11 @@ export class InvoiceController {
         throw new HttpException('Invalid settings data', HttpStatus.BAD_REQUEST);
       }
 
-      this.logger.log(`Updating einvoice config for tenant ${tenantId}`);
-      return this.invoiceService.updateConfig(tenantId, settingsData, authorization);
+      // Use einvoice as default app code if not specified
+      const appCode = appcode || 'einvoice';
+
+      this.logger.log(`Updating config for app: ${appCode} for tenant ${tenantId}`);
+      return this.invoiceService.updateConfig(tenantId, settingsData, authorization, appCode);
     } catch (error) {
       this.logger.error(`Failed to update config: ${error.message}`, error.stack);
       throw new HttpException(
@@ -144,6 +140,19 @@ export class InvoiceController {
         error.status || HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
+  }
+
+  @Get(':id')
+  async findOne(@Param('id') id: string) {
+    return this.invoiceService.findOne(+id);
+  }
+
+  @Patch(':id')
+  async update(
+    @Param('id') id: string,
+    @Body() updateInvoiceDto: UpdateInvoiceDto,
+  ) {
+    return this.invoiceService.update(+id, updateInvoiceDto);
   }
 
   /**
