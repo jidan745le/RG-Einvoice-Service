@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { HttpModule } from '@nestjs/axios';
 import { InvoiceController } from './invoice.controller';
 import { InvoiceService } from './invoice.service';
 import { Invoice } from './entities/invoice.entity';
@@ -11,6 +12,7 @@ import { TenantModule } from '../tenant/tenant.module';
 @Module({
   imports: [
     TypeOrmModule.forFeature([Invoice, InvoiceDetail]),
+    HttpModule,
     BaiwangModule,
     EpicorModule,
     TenantModule,
