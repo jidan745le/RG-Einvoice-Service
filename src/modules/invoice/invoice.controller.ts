@@ -11,6 +11,7 @@ import {
   Query,
   Req,
   BadRequestException,
+  HttpException,
 } from '@nestjs/common';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { QueryInvoiceDto } from './dto/query-invoice.dto';
@@ -26,6 +27,9 @@ interface RequestWithUser extends Request {
   user?: {
     id?: string;
     tenantId?: string;
+    tenant?: {
+      id?: string;
+    };
     [key: string]: any;
   };
 }
@@ -76,6 +80,73 @@ export class InvoiceController {
   }
 
   /**
+   * Get einvoice application configuration
+   * @param mode Optional configuration mode (merge or standalone)
+   * @returns Application configuration
+   */
+  @Get('config')
+  @HttpCode(HttpStatus.OK)
+  async getConfig(
+    @Req() request: RequestWithUser,
+    @Query('mode') mode?: 'merge' | 'standalone',
+  ) {
+    try {
+      const tenantId = request.user?.tenantId || request.user?.tenant?.id;
+      const authorization = request.headers.authorization;
+
+      if (!tenantId) {
+        throw new HttpException('Invalid authentication - tenant ID not found', HttpStatus.UNAUTHORIZED);
+      }
+
+      // Default to merge mode if not specified
+      const configMode = mode || 'merge';
+
+      this.logger.log(`Getting einvoice config with mode ${configMode} for tenant ${tenantId}`);
+      return this.invoiceService.getConfig(tenantId, authorization, configMode);
+    } catch (error) {
+      this.logger.error(`Failed to get config: ${error.message}`, error.stack);
+      throw new HttpException(
+        error.message || 'Failed to retrieve application configuration',
+        error.status || HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
+   * Update einvoice application configuration
+   * @param settingsData Configuration data to update
+   * @returns Updated configuration
+   */
+  @Post('config')
+  @HttpCode(HttpStatus.OK)
+  async updateConfig(
+    @Body() settingsData: Record<string, any>,
+    @Req() request: RequestWithUser,
+  ) {
+    try {
+      const tenantId = request.user?.tenantId || request.user?.tenant?.id;
+      const authorization = request.headers.authorization;
+
+      if (!tenantId) {
+        throw new HttpException('Invalid authentication - tenant ID not found', HttpStatus.UNAUTHORIZED);
+      }
+
+      if (!settingsData || typeof settingsData !== 'object') {
+        throw new HttpException('Invalid settings data', HttpStatus.BAD_REQUEST);
+      }
+
+      this.logger.log(`Updating einvoice config for tenant ${tenantId}`);
+      return this.invoiceService.updateConfig(tenantId, settingsData, authorization);
+    } catch (error) {
+      this.logger.error(`Failed to update config: ${error.message}`, error.stack);
+      throw new HttpException(
+        error.message || 'Failed to update application configuration',
+        error.status || HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /**
    * Submit invoice for e-invoicing
    * @param id Invoice ID
    * @param submittedBy User who submitted the invoice
@@ -89,7 +160,7 @@ export class InvoiceController {
     @Req() request: RequestWithUser
   ) {
     // 从请求中获取租户ID和认证头
-    const tenantId = request.user?.tenantId || 'default';
+    const tenantId = request.user?.tenantId || request.user?.tenant?.id || 'default';
     const authorization = request.headers.authorization;
     this.logger.log(`Submitting invoice ${id} by ${submittedBy} for tenant ${tenantId}`);
     return this.invoiceService.submitInvoice(+id, submittedBy, tenantId, authorization);

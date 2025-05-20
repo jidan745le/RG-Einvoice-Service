@@ -12,6 +12,9 @@ import { v4 as uuidv4 } from 'uuid';
 import { EpicorInvoice } from '../epicor/interfaces/epicor.interface';
 import { TenantConfigService } from '../tenant/tenant-config.service';
 import { EpicorTenantConfig } from '../epicor/epicor.service';
+import { ConfigService } from '@nestjs/config';
+import { HttpService } from '@nestjs/axios';
+import { lastValueFrom } from 'rxjs';
 
 @Injectable()
 export class InvoiceService {
@@ -25,6 +28,8 @@ export class InvoiceService {
     private readonly baiwangService: BaiwangService,
     private readonly epicorService: EpicorService,
     private readonly tenantConfigService: TenantConfigService,
+    private readonly configService: ConfigService,
+    private readonly httpService: HttpService,
   ) { }
 
   /**
@@ -1318,6 +1323,108 @@ export class InvoiceService {
       };
     } catch (error) {
       this.logger.error(`Error during cleanup and resync: ${error.message}`, error.stack);
+      throw error;
+    }
+  }
+
+  /**
+   * Get einvoice application configuration
+   * @param tenantId Tenant ID
+   * @param authorization Authorization header
+   * @param mode Configuration mode (merge or standalone)
+   * @returns Application configuration
+   */
+  async getConfig(tenantId: string, authorization?: string, mode: 'merge' | 'standalone' = 'merge'): Promise<any> {
+    this.logger.log(`Getting einvoice config for tenant: ${tenantId} with mode: ${mode}`);
+    try {
+      // Get the customer portal URL from the configuration service
+      const customerPortalUrl = this.configService.get<string>(
+        'CUSTOMER_PORTAL_URL',
+        'http://localhost:3000'
+      );
+
+      if (!authorization) {
+        throw new Error('No authorization header provided');
+      }
+
+      // Call the customer portal's app-config endpoint directly with mode parameter
+      const response = await lastValueFrom(
+        this.httpService.get(
+          `${customerPortalUrl}/app-config?appcode=einvoice&mode=${mode}`,
+          {
+            headers: {
+              Authorization: authorization,
+            },
+          }
+        )
+      );
+
+      return response.data;
+    } catch (error) {
+      this.logger.error(`Failed to get einvoice config: ${error.message}`, error.stack);
+      // Provide a default configuration in case of error
+      return {
+        settings: {
+          companyInfo: {
+            tel: "15888888888",
+            taxNo: "338888888888SMB",
+            drawer: "338888888888SMB",
+            address: "338888888888SMB",
+            bankName: "338888888888SMB",
+            bankAccount: "338888888888SMB",
+            companyName: "338888888888SMB"
+          },
+          taxAgencySettings: {
+            salt: "521c0eea19f04367ad20a3be12c9b4bc",
+            token: "9a38e3c2-175e-49a1-a56b-9ad0c5502aa2",
+            appKey: "1002948",
+            baseURL: "https://sandbox-openapi.baiwang.com/router/rest",
+            version: "6.0",
+            appSecret: "223998c6-5b76-4724-b5c9-666ff4215b45",
+            connector: "CN - BW",
+            userAccount: "admin_3sylog6ryv8cs"
+          }
+        }
+      };
+    }
+  }
+
+  /**
+   * Update einvoice application configuration
+   * @param tenantId Tenant ID
+   * @param settingsData Configuration data to update
+   * @param authorization Authorization header
+   * @returns Updated configuration
+   */
+  async updateConfig(tenantId: string, settingsData: Record<string, any>, authorization?: string): Promise<any> {
+    this.logger.log(`Updating einvoice config for tenant: ${tenantId}`);
+    try {
+      // Get the customer portal URL from the configuration service
+      const customerPortalUrl = this.configService.get<string>(
+        'CUSTOMER_PORTAL_URL',
+        'http://localhost:3000'
+      );
+
+      if (!authorization) {
+        throw new Error('No authorization header provided');
+      }
+
+      // Call the customer portal's app-config endpoint to update the settings
+      const response = await lastValueFrom(
+        this.httpService.post(
+          `${customerPortalUrl}/app-config?appcode=einvoice`,
+          settingsData,
+          {
+            headers: {
+              Authorization: authorization
+            }
+          }
+        )
+      );
+
+      return response.data;
+    } catch (error) {
+      this.logger.error(`Failed to update einvoice config: ${error.message}`, error.stack);
       throw error;
     }
   }
