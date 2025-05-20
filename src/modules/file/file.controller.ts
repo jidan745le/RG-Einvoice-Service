@@ -20,6 +20,7 @@ import { HttpService } from '@nestjs/axios';
 import { Response, Request } from 'express';
 import { lastValueFrom } from 'rxjs';
 import * as FormData from 'form-data';
+import { Public } from '../auth/decorators/public.decorator';
 
 interface MulterFile {
     fieldname: string;
@@ -116,6 +117,7 @@ export class FileController {
         }
     }
 
+    @Public()
     @Get(':filename')
     async getFile(
         @Param('filename') filename: string,
@@ -134,7 +136,8 @@ export class FileController {
                     `${customerPortalUrl}/files/${filename}`,
                     {
                         headers: {
-                            Authorization: request.headers.authorization,
+                            // Pass authorization if it exists, but don't require it
+                            ...(request.headers.authorization ? { Authorization: request.headers.authorization } : {}),
                         },
                         responseType: 'stream',
                     }
