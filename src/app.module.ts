@@ -8,6 +8,7 @@ import { BaiwangModule } from './modules/baiwang/baiwang.module';
 import { EpicorModule } from './modules/epicor/epicor.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { TenantModule } from './modules/tenant/tenant.module';
+import { FileModule } from './modules/file/file.module';
 import { Invoice } from './modules/invoice/entities/invoice.entity';
 import { InvoiceDetail } from './modules/invoice/entities/invoice-detail.entity';
 import * as path from 'path';
@@ -40,6 +41,7 @@ const isDev = process.env.NODE_ENV === 'development';
     EpicorModule,
     AuthModule,
     TenantModule,
+    FileModule,
     ExcelModule,
     DatabaseCleanupModule,
   ],
