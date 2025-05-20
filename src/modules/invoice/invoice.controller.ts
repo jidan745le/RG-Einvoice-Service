@@ -72,9 +72,9 @@ export class InvoiceController {
    * @param appcode Application code (defaults to 'einvoice')
    * @returns Application configuration
    */
-  @Get('config')
+  @Get('app-config')
   @HttpCode(HttpStatus.OK)
-  async getConfig(
+  async getAppConfig(
     @Req() request: RequestWithUser,
     @Query('mode') mode?: 'merge' | 'standalone',
     @Query('appcode') appcode?: string,
@@ -109,9 +109,9 @@ export class InvoiceController {
    * @param appcode Application code (defaults to 'einvoice')
    * @returns Updated configuration
    */
-  @Post('config')
+  @Post('app-config')
   @HttpCode(HttpStatus.OK)
-  async updateConfig(
+  async updateAppConfig(
     @Body() settingsData: Record<string, any>,
     @Req() request: RequestWithUser,
     @Query('appcode') appcode?: string,
