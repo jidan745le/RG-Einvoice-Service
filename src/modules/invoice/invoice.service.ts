@@ -15,16 +15,11 @@ import { EpicorTenantConfig } from '../epicor/epicor.service';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
+import { AuthorizationCacheService } from './authorization-cache.service';
 
 @Injectable()
 export class InvoiceService {
   private readonly logger = new Logger(InvoiceService.name);
-
-  // Cache to store authorization by orderNo for callback processing
-  private readonly authorizationCache = new Map<string, { authorization: string; tenantId: string; timestamp: number }>();
-
-  // Cache cleanup interval (24 hours)
-  private readonly CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
   constructor(
     @InjectRepository(Invoice)
@@ -36,60 +31,8 @@ export class InvoiceService {
     private readonly tenantConfigService: TenantConfigService,
     private readonly configService: ConfigService,
     private readonly httpService: HttpService,
+    private readonly authorizationCacheService: AuthorizationCacheService,
   ) {
-    // Clean up expired cache entries every hour
-    setInterval(() => {
-      this.cleanupExpiredCache();
-    }, 60 * 60 * 1000); // 1 hour
-  }
-
-  /**
-   * Clean up expired cache entries
-   */
-  private cleanupExpiredCache(): void {
-    const now = Date.now();
-    for (const [orderNo, entry] of this.authorizationCache.entries()) {
-      if (now - entry.timestamp > this.CACHE_TTL) {
-        this.authorizationCache.delete(orderNo);
-        this.logger.log(`Cleaned up expired cache entry for orderNo: ${orderNo}`);
-      }
-    }
-  }
-
-  /**
-   * Store authorization for callback processing
-   */
-  private storeAuthorizationForCallback(orderNo: string, authorization: string, tenantId: string): void {
-    this.authorizationCache.set(orderNo, {
-      authorization,
-      tenantId,
-      timestamp: Date.now()
-    });
-    this.logger.log(`Stored authorization for orderNo: ${orderNo}, tenantId: ${tenantId}`);
-  }
-
-  /**
-   * Retrieve authorization for callback processing
-   */
-  private getAuthorizationForCallback(orderNo: string): { authorization: string; tenantId: string } | null {
-    const entry = this.authorizationCache.get(orderNo);
-    if (!entry) {
-      this.logger.warn(`No authorization found in cache for orderNo: ${orderNo}`);
-      return null;
-    }
-
-    // Check if entry is expired
-    if (Date.now() - entry.timestamp > this.CACHE_TTL) {
-      this.authorizationCache.delete(orderNo);
-      this.logger.warn(`Authorization cache entry expired for orderNo: ${orderNo}`);
-      return null;
-    }
-
-    this.logger.log(`Retrieved authorization for orderNo: ${orderNo}, tenantId: ${entry.tenantId}`);
-    return {
-      authorization: entry.authorization,
-      tenantId: entry.tenantId
-    };
   }
 
   /**
@@ -305,104 +248,6 @@ export class InvoiceService {
         totals: { PENDING: 0, SUBMITTED: 0, ERROR: 0, RED_NOTE: 0, TOTAL: 0 },
       };
     }
-
-
-    // Original logic for fetching from local DB
-    // const queryBuilder = this.invoiceRepository.createQueryBuilder('invoice')
-    //   .leftJoinAndSelect('invoice.invoiceDetails', 'invoiceDetails');
-
-    // // 构建状态统计查询
-    // const statusQueryBuilder = this.invoiceRepository.createQueryBuilder('invoice')
-    //   .select('invoice.status', 'status')
-    //   .addSelect('COUNT(invoice.id)', 'count');
-
-    // // 对两个查询应用相同的过滤条件
-    // if (filters.erpInvoiceId) {
-    //   const erpFilter = 'CAST(invoice.erpInvoiceId AS CHAR) LIKE :erpInvoiceId';
-    //   queryBuilder.andWhere(erpFilter, { erpInvoiceId: `%${filters.erpInvoiceId}%` });
-    //   statusQueryBuilder.andWhere(erpFilter, { erpInvoiceId: `%${filters.erpInvoiceId}%` });
-    // }
-
-    // if (filters.customerName) {
-    //   const customerFilter = 'invoice.customerName LIKE :customerName';
-    //   queryBuilder.andWhere(customerFilter, { customerName: `%${filters.customerName}%` });
-    //   statusQueryBuilder.andWhere(customerFilter, { customerName: `%${filters.customerName}%` });
-    // }
-
-    // if (filters.status) {
-    //   const statusFilter = 'invoice.status = :status';
-    //   queryBuilder.andWhere(statusFilter, { status: filters.status });
-    //   // statusQueryBuilder.andWhere(statusFilter, { status: filters.status });
-    // }
-
-    // if (filters.eInvoiceId) {
-    //   const eInvoiceFilter = 'invoice.eInvoiceId = :eInvoiceId';
-    //   queryBuilder.andWhere(eInvoiceFilter, { eInvoiceId: filters.eInvoiceId });
-    //   statusQueryBuilder.andWhere(eInvoiceFilter, { eInvoiceId: filters.eInvoiceId });
-    // }
-
-    // if (filters.startDate) {
-    //   const startDateFilter = 'invoice.orderDate >= :startDate';
-    //   queryBuilder.andWhere(startDateFilter, { startDate: filters.startDate });
-    //   statusQueryBuilder.andWhere(startDateFilter, { startDate: filters.startDate });
-    // }
-
-    // if (filters.endDate) {
-    //   const endDateFilter = 'invoice.orderDate <= :endDate';
-    //   queryBuilder.andWhere(endDateFilter, { endDate: filters.endDate });
-    //   statusQueryBuilder.andWhere(endDateFilter, { endDate: filters.endDate });
-    // }
-
-    // if (filters.fapiaoType) {
-    //   const fapiaoFilter = 'invoice.fapiaoType = :fapiaoType';
-    //   queryBuilder.andWhere(fapiaoFilter, { fapiaoType: filters.fapiaoType });
-    //   statusQueryBuilder.andWhere(fapiaoFilter, { fapiaoType: filters.fapiaoType });
-    // }
-
-    // if (filters.submittedBy) {
-    //   const submitterFilter = 'invoice.submittedBy = :submittedBy';
-    //   queryBuilder.andWhere(submitterFilter, { submittedBy: filters.submittedBy });
-    //   statusQueryBuilder.andWhere(submitterFilter, { submittedBy: filters.submittedBy });
-    // }
-
-    // // 计算总记录数
-    // const total = await queryBuilder.getCount();
-
-    // // 添加分页和排序
-    // queryBuilder
-    //   .skip((page - 1) * limit)
-    //   .take(limit)
-    //   .orderBy('invoice.orderDate', 'DESC');
-
-    // // 执行分页查询获取列表项
-    // const items = await queryBuilder.getMany();
-
-    // // 添加分组统计并执行查询
-    // statusQueryBuilder.groupBy('invoice.status');
-    // const statusCounts = await statusQueryBuilder.getRawMany();
-
-    // // 创建状态计数对象并初始化所有状态为0
-    // const totals = {
-    //   PENDING: 0,
-    //   SUBMITTED: 0,
-    //   ERROR: 0,
-    //   RED_NOTE: 0,
-    //   TOTAL: 0,
-    // };
-
-    // // 用查询结果填充状态计数
-    // statusCounts.forEach(item => {
-    //   totals[item.status] = parseInt(item.count, 10);
-    // });
-    // totals.TOTAL = totals.PENDING + totals.SUBMITTED + totals.ERROR + totals.RED_NOTE;
-
-    // return {
-    //   items,
-    //   total,
-    //   page,
-    //   limit,
-    //   totals
-    // };
   }
 
   /**
@@ -517,12 +362,14 @@ export class InvoiceService {
 
       // Store authorization for callback processing
       if (authorization) {
-        this.storeAuthorizationForCallback(orderNo, authorization, tenantId);
+        this.authorizationCacheService.storeAuthorizationForCallback(orderNo, authorization, tenantId);
       } else {
         this.logger.warn(`No authorization provided for invoice ${id}, callback processing may fail`);
       }
 
-      this.logger.log(`data0: ${JSON.stringify(this.authorizationCache)}`);
+      // Log cache stats instead of trying to stringify the Map
+      const cacheStats = this.authorizationCacheService.getCacheStats();
+      this.logger.log(`Authorization cache stats after storing: ${JSON.stringify(cacheStats)}`);
 
       // Map invoice details to Baiwang format from Epicor data
       const invoiceDetailList = (epicorInvoiceData.InvcDtls || []).map(detail => ({
@@ -650,11 +497,14 @@ export class InvoiceService {
 
         this.logger.log(`erpInvoiceId: ${erpInvoiceId}`);
         this.logger.log(`orderNo: ${orderNo}`);
-        this.logger.log(`data: ${JSON.stringify(this.authorizationCache)}`);
+
+        // Log cache stats instead of trying to stringify the Map
+        const cacheStats = this.authorizationCacheService.getCacheStats();
+        this.logger.log(`Authorization cache stats: ${JSON.stringify(cacheStats)}`);
 
         // Get Epicor configuration using cached authorization from submit time
         // Extract orderNo to get cached authorization and tenant info
-        const cachedAuth = this.getAuthorizationForCallback(orderNo);
+        const cachedAuth = this.authorizationCacheService.getAuthorizationForCallback(orderNo);
 
         if (!cachedAuth) {
           this.logger.error(`No cached authorization found for orderNo: ${orderNo}`);
@@ -783,7 +633,7 @@ export class InvoiceService {
 
         if (erpInvoiceId) {
           // Get Epicor configuration using cached authorization
-          const cachedAuth = this.getAuthorizationForCallback(data.orderNo);
+          const cachedAuth = this.authorizationCacheService.getAuthorizationForCallback(data.orderNo);
 
           if (!cachedAuth) {
             this.logger.warn(`No cached authorization found for error callback orderNo: ${data.orderNo}`);
@@ -878,7 +728,7 @@ export class InvoiceService {
 
         // Get Epicor configuration using cached authorization from submit time
         // Extract orderNo to get cached authorization and tenant info
-        const cachedAuth = this.getAuthorizationForCallback(orderNo);
+        const cachedAuth = this.authorizationCacheService.getAuthorizationForCallback(orderNo);
 
         if (!cachedAuth) {
           this.logger.error(`No cached authorization found for orderNo: ${orderNo}`);
@@ -1010,7 +860,7 @@ export class InvoiceService {
           // 更新所有相关发票的状态在Epicor中
           if (erpInvoiceIds.length) {
             // Get Epicor configuration using cached authorization
-            const cachedAuth = this.getAuthorizationForCallback(orderNo);
+            const cachedAuth = this.authorizationCacheService.getAuthorizationForCallback(orderNo);
 
             if (!cachedAuth) {
               this.logger.warn(`No cached authorization found for error callback orderNo: ${orderNo}`);
@@ -1426,10 +1276,14 @@ export class InvoiceService {
 
       // Store authorization for callback processing
       if (authorization) {
-        this.storeAuthorizationForCallback(orderNo, authorization, tenantId);
+        this.authorizationCacheService.storeAuthorizationForCallback(orderNo, authorization, tenantId);
       } else {
         this.logger.warn(`No authorization provided for merged invoices ${erpInvoiceIds.join(', ')}, callback processing may fail`);
       }
+
+      // Log cache stats instead of trying to stringify the Map
+      const cacheStats = this.authorizationCacheService.getCacheStats();
+      this.logger.log(`Authorization cache stats after storing: ${JSON.stringify(cacheStats)}`);
 
       // 创建百望请求
       const baiwangRequest = {
@@ -1793,36 +1647,14 @@ export class InvoiceService {
    * Get authorization cache statistics
    */
   getAuthorizationCacheStats(): { totalEntries: number; oldestEntry: Date | null; newestEntry: Date | null } {
-    const entries = Array.from(this.authorizationCache.values());
-
-    if (entries.length === 0) {
-      return {
-        totalEntries: 0,
-        oldestEntry: null,
-        newestEntry: null
-      };
-    }
-
-    const timestamps = entries.map(entry => entry.timestamp);
-    const oldestTimestamp = Math.min(...timestamps);
-    const newestTimestamp = Math.max(...timestamps);
-
-    return {
-      totalEntries: entries.length,
-      oldestEntry: new Date(oldestTimestamp),
-      newestEntry: new Date(newestTimestamp)
-    };
+    return this.authorizationCacheService.getCacheStats();
   }
 
   /**
    * Manually clear authorization cache
    */
   clearAuthorizationCache(): { clearedEntries: number } {
-    const entriesCount = this.authorizationCache.size;
-    this.authorizationCache.clear();
-    this.logger.log(`Manually cleared ${entriesCount} authorization cache entries`);
-
-    return { clearedEntries: entriesCount };
+    return this.authorizationCacheService.clearCache();
   }
 
   /**
@@ -1841,7 +1673,7 @@ export class InvoiceService {
       const testAuth = 'Bearer test-token-12345';
       const testTenantId = 'tenant1';
 
-      this.storeAuthorizationForCallback(testOrderNo, testAuth, testTenantId);
+      this.authorizationCacheService.storeAuthorizationForCallback(testOrderNo, testAuth, testTenantId);
       results.push({
         step: 'Store Authorization',
         success: true,
@@ -1849,7 +1681,7 @@ export class InvoiceService {
       });
 
       // Test 2: Retrieve authorization
-      const retrieved = this.getAuthorizationForCallback(testOrderNo);
+      const retrieved = this.authorizationCacheService.getAuthorizationForCallback(testOrderNo);
       if (retrieved && retrieved.authorization === testAuth && retrieved.tenantId === testTenantId) {
         results.push({
           step: 'Retrieve Authorization',
@@ -1865,7 +1697,7 @@ export class InvoiceService {
       }
 
       // Test 3: Try to retrieve non-existent authorization
-      const nonExistent = this.getAuthorizationForCallback('NON-EXISTENT-ORDER');
+      const nonExistent = this.authorizationCacheService.getAuthorizationForCallback('NON-EXISTENT-ORDER');
       if (!nonExistent) {
         results.push({
           step: 'Retrieve Non-existent',
@@ -1881,7 +1713,7 @@ export class InvoiceService {
       }
 
       // Clean up test data
-      this.authorizationCache.delete(testOrderNo);
+      this.authorizationCacheService.clearAuthorizationCache();
 
     } catch (error) {
       results.push({

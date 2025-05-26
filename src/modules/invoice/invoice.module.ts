@@ -8,6 +8,7 @@ import { InvoiceDetail } from './entities/invoice-detail.entity';
 import { BaiwangModule } from '../baiwang/baiwang.module';
 import { EpicorModule } from '../epicor/epicor.module';
 import { TenantModule } from '../tenant/tenant.module';
+import { AuthorizationCacheService } from './authorization-cache.service';
 
 @Module({
   imports: [
@@ -18,7 +19,7 @@ import { TenantModule } from '../tenant/tenant.module';
     TenantModule,
   ],
   controllers: [InvoiceController],
-  providers: [InvoiceService],
+  providers: [InvoiceService, AuthorizationCacheService],
   exports: [InvoiceService],
 })
 export class InvoiceModule { }
