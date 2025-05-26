@@ -175,6 +175,7 @@ export class InvoiceService {
       );
 
       const epicorInvoicesRaw = epicorData.value || [];
+      this.logger.log(`Epicor invoices: ${JSON.stringify(epicorInvoicesRaw)}`);
 
       // Transform the new API response structure
       const transformedInvoices: Invoice[] = [];
@@ -215,7 +216,7 @@ export class InvoiceService {
 
       // Sorting is now on the current page's data. For global sorting, OData $orderby should be used.
       transformedInvoices.sort((a, b) => (b.orderDate?.getTime() || 0) - (a.orderDate?.getTime() || 0)); // Example sort by date
-
+      this.logger.log(`Transformed invoices: ${JSON.stringify(transformedInvoices)}`);
       const totalItems = epicorData['@odata.count'] !== undefined ? epicorData['@odata.count'] : transformedInvoices.length;
       // If @odata.count is undefined and transformedInvoices.length is used, it's only the current page count if top/skip was effective.
 
