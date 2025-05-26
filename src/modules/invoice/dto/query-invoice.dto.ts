@@ -55,4 +55,8 @@ export class QueryInvoiceDto {
   @IsOptional()
   @IsString()
   invoiceComment?: string;
+
+  @IsOptional()
+  @IsDateString()
+  eInvoiceDate?: string;
 } 

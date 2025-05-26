@@ -127,11 +127,15 @@ export class InvoiceService {
         }
       }
       if (filters.customerName) {
-        filterClauses.push(`substringof('${filters.customerName}', CustomerName)`);
+        filterClauses.push(`substringof(CustomerName, '${filters.customerName}')`);
       }
       if (filters.eInvoiceId) {
         filterClauses.push(`ELIEInvID eq '${filters.eInvoiceId}'`);
       }
+
+      // if (filters.eInvoiceDate) {
+      //   filterClauses.push(`ELIEInvUpdatedOn eq datetime'${filters.eInvoiceDate}'`);
+      // }
 
       const formatDate = (dateInput: string | Date): string | null => {
         if (!dateInput) return null;
@@ -165,7 +169,7 @@ export class InvoiceService {
       // Note: filters.status is intentionally ignored for Epicor queries as per current plan.
 
       if (filters.invoiceComment) {
-        filterClauses.push(`substringof('${filters.invoiceComment}', InvoiceComment)`);
+        filterClauses.push(`substringof(InvoiceComment, '${filters.invoiceComment}')`);
       }
       const odataFilterString = filterClauses.join(' and ');
       this.logger.log(`Constructed OData Filter for Epicor: ${odataFilterString}`);
@@ -184,17 +188,27 @@ export class InvoiceService {
       const transformedInvoices: Invoice[] = [];
       for (const epicorInvoice of epicorInvoicesRaw as unknown as EpicorInvoiceHeader[]) {
         const invoice = new Invoice();
-        invoice.erpInvoiceId = epicorInvoice.InvoiceNum;
-        invoice.erpInvoiceDescription = epicorInvoice.Description || '';
+        // Map fields to match frontend columns exactly
+        invoice.postDate = epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : null;
+        invoice.id = epicorInvoice.InvoiceNum; // This is used as erpInvoiceId in frontend
         invoice.fapiaoType = epicorInvoice.CNTaxInvoiceType?.toString() || '';
         invoice.customerName = epicorInvoice.CustomerName || '';
-        invoice.customerResaleId = epicorInvoice.CustNum?.toString() || '';
+        invoice.invoiceAmount = parseFloat(epicorInvoice.DocInvoiceAmt || '0');
         invoice.invoiceComment = epicorInvoice.InvoiceComment || '';
+        invoice.status = epicorInvoice.ELIEInvStatus === 0 ? 'PENDING' : epicorInvoice.ELIEInvStatus === 1 ? 'SUBMITTED' : 'ERROR';
+        invoice.eInvoiceId = epicorInvoice.ELIEInvID || null;
+        invoice.hasPdf = !!epicorInvoice.ELIEInvID; // If there's an e-invoice ID, we assume there's a PDF
+        invoice.eInvoiceDate = epicorInvoice.ELIEInvUpdatedOn ? new Date(epicorInvoice.ELIEInvUpdatedOn) : null;
+        invoice.submittedBy = epicorInvoice.ELIEInvUpdatedBy || null;
+        invoice.comment = epicorInvoice.ELIEInvException || null;
+
+        // Additional fields needed for backend processing
+        invoice.erpInvoiceId = epicorInvoice.InvoiceNum;
+        invoice.erpInvoiceDescription = epicorInvoice.Description || '';
+        invoice.customerResaleId = epicorInvoice.CustNum?.toString() || '';
         invoice.orderNumber = epicorInvoice.OrderNum?.toString() || '';
         invoice.orderDate = epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : null;
         invoice.poNumber = epicorInvoice.PONum || '';
-        invoice.status = epicorInvoice.ELIEInvStatus === 0 ? 'PENDING' : epicorInvoice.ELIEInvStatus === 1 ? 'SUBMITTED' : 'ERROR';
-        invoice.id = epicorInvoice.InvoiceNum;
         invoice.createdAt = epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : new Date();
         invoice.updatedAt = epicorInvoice.ELIEInvUpdatedOn ? new Date(epicorInvoice.ELIEInvUpdatedOn) : new Date();
 
@@ -1034,11 +1048,11 @@ export class InvoiceService {
         originalSerialNo: originalInvoice.eInvoiceId,
         originalOrderNo: originalInvoice.orderNumber,
         originalDigitInvoiceNo: originalInvoice.digitInvoiceNo,
-        callBackUrl: 'http://8.219.189.158:81/e-invoice/api/invoice/red/callback',
+        callBackUrl: 'https://einvoice-test.rg-experience.com/api/invoice/red/callback',
       };
 
       // Submit to Baiwang
-      const result = await this.baiwangService.submitRedInvoice(request);
+      const result = await this.baiwangService.submitRedInvoice(request as any);
 
       // Create a new invoice record for the red invoice
       const redInvoice = this.invoiceRepository.create({
