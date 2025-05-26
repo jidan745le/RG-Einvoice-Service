@@ -80,7 +80,7 @@ export class EpicorService {
     try {
       this.logger.log(`Fetching invoices from Epicor BAQ for company: ${epicorTenantConfig.companyID} with OData params: ${JSON.stringify(odataParams)}`);
 
-      let url = `${epicorTenantConfig.serverBaseAPI}/Erp.BO.ARInvoiceSvc/ARInvoices?expand=InvcDtls`;
+      let url = `${epicorTenantConfig.serverBaseAPI}/Erp.BO.ARInvoiceSvc/ARInvoices`;
 
       const queryParams: string[] = [];
       if (odataParams?.filter && odataParams.filter.trim() !== '') {
@@ -99,6 +99,8 @@ export class EpicorService {
       if (queryParams.length > 0) {
         url += `?${queryParams.join('&')}`;
       }
+
+      url += `?$expand=InvcDtls`;
 
       const headers = {
         'Accept': 'application/json',
