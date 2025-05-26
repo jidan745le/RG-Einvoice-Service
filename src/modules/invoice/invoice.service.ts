@@ -119,7 +119,7 @@ export class InvoiceService {
           const numValue = Number(filters.erpInvoiceId);
           if (!isNaN(numValue)) {
             // Use string concatenation with explicit string conversion
-            filterClauses.push('InvcHead_InvoiceNum eq ' + numValue.toString());
+            filterClauses.push('InvoiceNum eq ' + numValue.toString());
           }
         } catch (e) {
           // If parsing fails, skip this filter
@@ -127,10 +127,10 @@ export class InvoiceService {
         }
       }
       if (filters.customerName) {
-        filterClauses.push(`substringof(Customer_Name, '${filters.customerName}')`);
+        filterClauses.push(`substringof('${filters.customerName}', CustomerName)`);
       }
       if (filters.eInvoiceId) {
-        filterClauses.push(`InvcHead_ELIEInvID eq '${filters.eInvoiceId}'`);
+        filterClauses.push(`ELIEInvID eq '${filters.eInvoiceId}'`);
       }
 
       const formatDate = (dateInput: string | Date): string | null => {
@@ -145,27 +145,27 @@ export class InvoiceService {
       if (filters.startDate) {
         const formattedDate = formatDate(filters.startDate);
         if (formattedDate) {
-          filterClauses.push(`OrderHed_OrderDate ge datetime'${formattedDate}'`);
+          filterClauses.push(`InvoiceDate ge datetime'${formattedDate}'`);
         }
       }
       if (filters.endDate) {
         const formattedDate = formatDate(filters.endDate);
         if (formattedDate) {
-          filterClauses.push(`OrderHed_OrderDate le datetime'${formattedDate}'`);
+          filterClauses.push(`InvoiceDate le datetime'${formattedDate}'`);
         }
       }
       if (filters.fapiaoType) {
         // Assuming filters.fapiaoType is a number or a string that can be used directly.
-        // If InvcHead_CNTaxInvoiceType is numeric, and filters.fapiaoType is string, it might need conversion or 'eq' might handle it.
-        filterClauses.push(`InvcHead_CNTaxInvoiceType eq ${filters.fapiaoType}`);
+        // If CNTaxInvoiceType is numeric, and filters.fapiaoType is string, it might need conversion or 'eq' might handle it.
+        filterClauses.push(`CNTaxInvoiceType eq ${filters.fapiaoType}`);
       }
       if (filters.submittedBy) {
-        filterClauses.push(`InvcHead_ELIEInvUpdatedBy eq '${filters.submittedBy}'`);
+        filterClauses.push(`ELIEInvUpdatedBy eq '${filters.submittedBy}'`);
       }
       // Note: filters.status is intentionally ignored for Epicor queries as per current plan.
 
       if (filters.invoiceComment) {
-        filterClauses.push(`substringof(InvcHead_InvoiceComment, '${filters.invoiceComment}')`);
+        filterClauses.push(`substringof('${filters.invoiceComment}', InvoiceComment)`);
       }
       const odataFilterString = filterClauses.join(' and ');
       this.logger.log(`Constructed OData Filter for Epicor: ${odataFilterString}`);
