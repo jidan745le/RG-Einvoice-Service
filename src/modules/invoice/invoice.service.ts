@@ -513,8 +513,7 @@ export class InvoiceService {
       const companyInfo = await this.tenantConfigService.getCompanyInfo(tenantId, authorization);
 
       // Generate order number using UUID (shortened) and include erpInvoiceId for easier retrieval in callback
-      // Also include tenantId for callback processing
-      const orderNo = `ORD-${uuidv4().substring(0, 8)}-${tenantId}-${id}`;
+      const orderNo = `ORD-${uuidv4().substring(0, 8)}-${id}`;
 
       // Store authorization for callback processing
       if (authorization) {
@@ -629,13 +628,17 @@ export class InvoiceService {
         let erpInvoiceId: number | undefined = undefined;
         if (orderNo) {
           try {
-            // Try to extract the erpInvoiceId from the orderNo with new format: ORD-{uuid}-{tenantId}-{invoiceId}
-            const match = orderNo.match(/ORD-[a-f0-9]+-[^-]+-(\d+)/);
+            this.logger.log(`Attempting to extract erpInvoiceId from orderNo: ${orderNo}`);
+            // Extract erpInvoiceId from simplified format: ORD-{shortUuid}-{invoiceId}
+            const match = orderNo.match(/ORD-[a-f0-9]+-(\d+)$/);
             if (match && match[1]) {
               erpInvoiceId = parseInt(match[1], 10);
+              this.logger.log(`Successfully extracted erpInvoiceId: ${erpInvoiceId} from orderNo: ${orderNo}`);
+            } else {
+              this.logger.warn(`Regex match failed for orderNo: ${orderNo}. Match result: ${JSON.stringify(match)}`);
             }
           } catch (error) {
-            this.logger.warn(`Could not extract erpInvoiceId from : ${orderNo}`);
+            this.logger.warn(`Could not extract erpInvoiceId from orderNo: ${orderNo}. Error: ${error.message}`);
           }
         }
 
@@ -758,12 +761,17 @@ export class InvoiceService {
         let erpInvoiceId: number | undefined = undefined;
         if (data.orderNo) {
           try {
-            const match = data.orderNo.match(/ORD-[a-f0-9]+-[^-]+-(\d+)/);
+            this.logger.log(`Attempting to extract erpInvoiceId from orderNo: ${data.orderNo}`);
+            // Extract erpInvoiceId from simplified format: ORD-{shortUuid}-{invoiceId}
+            const match = data.orderNo.match(/ORD-[a-f0-9]+-(\d+)$/);
             if (match && match[1]) {
               erpInvoiceId = parseInt(match[1], 10);
+              this.logger.log(`Successfully extracted erpInvoiceId: ${erpInvoiceId} from orderNo: ${data.orderNo}`);
+            } else {
+              this.logger.warn(`Regex match failed for orderNo: ${data.orderNo}. Match result: ${JSON.stringify(match)}`);
             }
           } catch (error) {
-            this.logger.warn(`Could not extract erpInvoiceId from orderNo: ${data.orderNo}`);
+            this.logger.warn(`Could not extract erpInvoiceId from orderNo: ${data.orderNo}. Error: ${error.message}`);
           }
         }
 
@@ -845,10 +853,11 @@ export class InvoiceService {
         // 使用orderNo查找发票
         const orderNo = data.orderNo;
 
-        // 从orderNo中提取所有的erpInvoiceId with new format: MERGE-{uuid}-{tenantId}-{invoiceIds}
+        // 从orderNo中提取所有的erpInvoiceId with simplified format
         let erpInvoiceIds: number[] = [];
         try {
-          const match = orderNo.match(/MERGE-[a-f0-9]+-[^-]+-(.+)/);
+          // Extract invoice IDs from simplified format: MERGE-{shortUuid}-{invoiceIds}
+          const match = orderNo.match(/MERGE-[a-f0-9]+-(.+)$/);
           if (match && match[1]) {
             erpInvoiceIds = match[1].split('-').map(id => parseInt(id, 10));
           }
@@ -983,7 +992,8 @@ export class InvoiceService {
         if (orderNo && orderNo.startsWith('MERGE-')) {
           let erpInvoiceIds: number[] = [];
           try {
-            const match = orderNo.match(/MERGE-[a-f0-9]+-[^-]+-(.+)/);
+            // Extract invoice IDs from simplified format: MERGE-{shortUuid}-{invoiceIds}
+            const match = orderNo.match(/MERGE-[a-f0-9]+-(.+)$/);
             if (match && match[1]) {
               erpInvoiceIds = match[1].split('-').map(id => parseInt(id, 10));
             }
@@ -1252,7 +1262,7 @@ export class InvoiceService {
       if (orderNo) {
         try {
           // Try to extract the erpInvoiceId from the orderNo if it was formatted that way during submission
-          const match = orderNo.match(/RED-[a-f0-9]+-(\d+)/);
+          const match = orderNo.match(/RED-[a-f0-9-]+-(\d+)$/);
           if (match && match[1]) {
             erpInvoiceId = parseInt(match[1], 10);
           }
@@ -1406,8 +1416,7 @@ export class InvoiceService {
       const totalAmount = mergedItems.reduce((sum, item) => sum + Number(item.goodsTotalPrice), 0);
 
       // 生成订单号，包含所有发票ID以便回调时识别
-      // Also include tenantId for callback processing
-      const orderNo = `MERGE-${uuidv4().substring(0, 8)}-${tenantId}-${erpInvoiceIds.join('-')}`;
+      const orderNo = `MERGE-${uuidv4().substring(0, 8)}-${erpInvoiceIds.join('-')}`;
 
       // Store authorization for callback processing
       if (authorization) {
@@ -1822,7 +1831,7 @@ export class InvoiceService {
 
     try {
       // Test 1: Store authorization
-      const testOrderNo = `TEST-${uuidv4().substring(0, 8)}-tenant1-12345`;
+      const testOrderNo = `TEST-${uuidv4().substring(0, 8)}-12345`;
       const testAuth = 'Bearer test-token-12345';
       const testTenantId = 'tenant1';
 
