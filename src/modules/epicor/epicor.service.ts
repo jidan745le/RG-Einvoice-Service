@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { lastValueFrom } from 'rxjs';
-import { EpicorConfig, EpicorResponse, EpicorInvoice } from './interfaces/epicor.interface';
+import { EpicorConfig, EpicorResponse, EpicorInvoice, EpicorInvoiceHeader } from './interfaces/epicor.interface';
 
 export interface EpicorTenantConfig {
   serverBaseAPI: string;
@@ -80,7 +80,7 @@ export class EpicorService {
     try {
       this.logger.log(`Fetching invoices from Epicor BAQ for company: ${epicorTenantConfig.companyID} with OData params: ${JSON.stringify(odataParams)}`);
 
-      let url = `${epicorTenantConfig.serverBaseAPI}/BaqSvc/InvReport(${epicorTenantConfig.companyID})/`;
+      let url = `${epicorTenantConfig.serverBaseAPI}/Erp.BO.ARInvoiceSvc`;
 
       const queryParams: string[] = [];
       if (odataParams?.filter && odataParams.filter.trim() !== '') {
@@ -103,6 +103,7 @@ export class EpicorService {
       const headers = {
         'Accept': 'application/json',
         'Authorization': `Basic ${Buffer.from(`${epicorTenantConfig.userAccount}:${epicorTenantConfig.password || ''}`).toString('base64')}`,
+        'callsettings': `{"Company":"${epicorTenantConfig.companyID}"}`,
       };
 
       this.logger.log(`Requesting Epicor BAQ URL: ${url}`);
@@ -123,6 +124,97 @@ export class EpicorService {
     }
   }
 
+  /**
+   * Get a single invoice by ID from Epicor
+   * @param epicorTenantConfig Epicor tenant configuration
+   * @param invoiceId Invoice ID
+   * @returns Invoice data with details
+   */
+  async getInvoiceById(
+    epicorTenantConfig: EpicorTenantConfig,
+    invoiceId: number
+  ): Promise<EpicorInvoiceHeader | null> {
+    try {
+      this.logger.log(`Fetching invoice ${invoiceId} from Epicor for company: ${epicorTenantConfig.companyID}`);
+
+      const url = `${epicorTenantConfig.serverBaseAPI}/Erp.BO.ARInvoiceSvc/ARInvoices(${epicorTenantConfig.companyID},${invoiceId})?$expand=InvcDtls`;
+
+      const headers = {
+        'Accept': 'application/json',
+        'Authorization': `Basic ${Buffer.from(`${epicorTenantConfig.userAccount}:${epicorTenantConfig.password || ''}`).toString('base64')}`,
+        'callsettings': `{"Company":"${epicorTenantConfig.companyID}"}`,
+      };
+
+      this.logger.log(`Requesting Epicor invoice URL: ${url}`);
+      const response = await lastValueFrom(
+        this.httpService.get<EpicorInvoiceHeader>(url, { headers })
+      );
+
+      this.logger.log(`Retrieved invoice ${invoiceId} from Epicor successfully`);
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        this.logger.warn(`Invoice ${invoiceId} not found in Epicor`);
+        return null;
+      }
+      this.logger.error(`Error fetching invoice ${invoiceId} from Epicor: ${error.message}`, error.stack);
+      if (error.response) {
+        this.logger.error(`Epicor Error Response Data: ${JSON.stringify(error.response.data)}`);
+        this.logger.error(`Epicor Error Response Status: ${error.response.status}`);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Update invoice status in Epicor
+   * @param epicorTenantConfig Epicor tenant configuration
+   * @param invoiceId Invoice ID
+   * @param updateData Data to update
+   * @returns Updated invoice data
+   */
+  async updateInvoiceStatus(
+    epicorTenantConfig: EpicorTenantConfig,
+    invoiceId: number,
+    updateData: {
+      ELIEInvoice?: boolean;
+      ELIEInvStatus?: number;
+      ELIEInvUpdatedBy?: string;
+      ELIEInvException?: string;
+      ELIEInvUpdatedOn?: string;
+      EInvRefNum?: string;
+      ELIEInvID?: string;
+      RowMod: string;
+    }
+  ): Promise<any> {
+    try {
+      this.logger.log(`Updating invoice ${invoiceId} status in Epicor for company: ${epicorTenantConfig.companyID}`);
+
+      const url = `${epicorTenantConfig.serverBaseAPI}/Erp.BO.ARInvoiceSvc/ARInvoices(${epicorTenantConfig.companyID},${invoiceId})`;
+
+      const headers = {
+        'Accept': '*/*',
+        'Content-Type': 'application/json',
+        'Authorization': `Basic ${Buffer.from(`${epicorTenantConfig.userAccount}:${epicorTenantConfig.password || ''}`).toString('base64')}`,
+        'callsettings': `{"Company":"${epicorTenantConfig.companyID}"}`,
+      };
+
+      this.logger.log(`Updating Epicor invoice URL: ${url} with data: ${JSON.stringify(updateData)}`);
+      const response = await lastValueFrom(
+        this.httpService.patch(url, updateData, { headers })
+      );
+
+      this.logger.log(`Updated invoice ${invoiceId} status in Epicor successfully`);
+      return response.data;
+    } catch (error) {
+      this.logger.error(`Error updating invoice ${invoiceId} status in Epicor: ${error.message}`, error.stack);
+      if (error.response) {
+        this.logger.error(`Epicor Update Error Response Data: ${JSON.stringify(error.response.data)}`);
+        this.logger.error(`Epicor Update Error Response Status: ${error.response.status}`);
+      }
+      throw error;
+    }
+  }
 
   // async updateInvoiceFromEpicor(invoice: EpicorInvoice): Promise<EpicorInvoice> {
   //   try {

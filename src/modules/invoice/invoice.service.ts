@@ -9,7 +9,7 @@ import { QueryInvoiceDto } from './dto/query-invoice.dto';
 import { BaiwangService } from '../baiwang/baiwang.service';
 import { EpicorService } from '../epicor/epicor.service';
 import { v4 as uuidv4 } from 'uuid';
-import { EpicorInvoice } from '../epicor/interfaces/epicor.interface';
+import { EpicorInvoice, EpicorInvoiceHeader } from '../epicor/interfaces/epicor.interface';
 import { TenantConfigService } from '../tenant/tenant-config.service';
 import { EpicorTenantConfig } from '../epicor/epicor.service';
 import { ConfigService } from '@nestjs/config';
@@ -174,43 +174,39 @@ export class InvoiceService {
           }
         );
 
-        const epicorInvoicesRaw = epicorData.value || []; // Ensure it's an array
+        const epicorInvoicesRaw = epicorData.value || [];
 
-        // The transformation logic remains largely the same, operating on the fetched page data.
-        const groupedEpicorInvoices = this.groupInvoicesByNumber(epicorInvoicesRaw);
+        // Transform the new API response structure
         const transformedInvoices: Invoice[] = [];
-        for (const invoiceNumStr in groupedEpicorInvoices) {
-          const invoiceDetailsRaw = groupedEpicorInvoices[invoiceNumStr];
-          const firstDetailRaw = invoiceDetailsRaw[0];
-
+        for (const epicorInvoice of epicorInvoicesRaw as unknown as EpicorInvoiceHeader[]) {
           const invoice = new Invoice();
-          invoice.erpInvoiceId = firstDetailRaw.InvcHead_InvoiceNum;
-          invoice.erpInvoiceDescription = firstDetailRaw.InvcHead_Description;
-          invoice.fapiaoType = firstDetailRaw.InvcHead_CNTaxInvoiceType?.toString() || '';
-          invoice.customerName = firstDetailRaw.Customer_Name;
-          invoice.customerResaleId = firstDetailRaw.Customer_ResaleID;
-          invoice.invoiceComment = firstDetailRaw.InvcHead_InvoiceComment;
-          invoice.orderNumber = firstDetailRaw.OrderHed_OrderNum?.toString() || '';
-          invoice.orderDate = firstDetailRaw.OrderHed_OrderDate && firstDetailRaw.OrderHed_OrderDate.trim() !== '' ? new Date(firstDetailRaw.OrderHed_OrderDate) : null;
-          invoice.poNumber = firstDetailRaw.OrderHed_PONum || '';
+          invoice.erpInvoiceId = epicorInvoice.InvoiceNum;
+          invoice.erpInvoiceDescription = epicorInvoice.Description || '';
+          invoice.fapiaoType = epicorInvoice.CNTaxInvoiceType?.toString() || '';
+          invoice.customerName = epicorInvoice.CustomerName || '';
+          invoice.customerResaleId = epicorInvoice.CustNum?.toString() || '';
+          invoice.invoiceComment = epicorInvoice.InvoiceComment || '';
+          invoice.orderNumber = epicorInvoice.OrderNum?.toString() || '';
+          invoice.orderDate = epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : null;
+          invoice.poNumber = epicorInvoice.PONum || '';
           invoice.status = 'PENDING';
-          invoice.id = firstDetailRaw.InvcHead_InvoiceNum;
-          invoice.createdAt = firstDetailRaw.OrderHed_OrderDate ? new Date(firstDetailRaw.OrderHed_OrderDate) : new Date(); // Using OrderDate as a proxy for creation for sorting
-          invoice.updatedAt = firstDetailRaw.InvcHead_ELIEInvUpdatedOn ? new Date(firstDetailRaw.InvcHead_ELIEInvUpdatedOn) : new Date();
+          invoice.id = epicorInvoice.InvoiceNum;
+          invoice.createdAt = epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : new Date();
+          invoice.updatedAt = epicorInvoice.ELIEInvUpdatedOn ? new Date(epicorInvoice.ELIEInvUpdatedOn) : new Date();
 
-
-          invoice.invoiceDetails = invoiceDetailsRaw.map(detailRaw => {
+          // Map invoice details from InvcDtls array
+          invoice.invoiceDetails = (epicorInvoice.InvcDtls || []).map(detailRaw => {
             const detail = new InvoiceDetail();
-            detail.erpInvoiceId = detailRaw.InvcDtl_InvoiceNum;
-            detail.lineDescription = detailRaw.InvcDtl_LineDesc || '';
-            detail.commodityCode = detailRaw.InvcDtl_CommodityCode || '';
-            detail.uomDescription = detailRaw.UOMClass_Description || '';
-            detail.salesUm = detailRaw.InvcDtl_SalesUM || '';
-            detail.sellingShipQty = parseFloat(detailRaw.InvcDtl_SellingShipQty || "0") || 0;
-            detail.docUnitPrice = parseFloat(detailRaw.InvcDtl_DocUnitPrice || "0") || 0;
-            detail.docExtPrice = parseFloat(detailRaw.InvcDtl_DocExtPrice || "0") || 0;
-            detail.taxPercent = parseFloat(detailRaw.InvcTax_Percent || "0") || 0;
-            detail.id = parseInt(`${firstDetailRaw.InvcHead_InvoiceNum}${detailRaw.RowIdent?.substring(0, 6) || Math.random().toString(36).substring(2, 8)}`, 36);
+            detail.erpInvoiceId = detailRaw.InvoiceNum;
+            detail.lineDescription = detailRaw.LineDesc || '';
+            detail.commodityCode = detailRaw.CommodityCode || '';
+            detail.uomDescription = detailRaw.IUM || '';
+            detail.salesUm = detailRaw.SalesUM || '';
+            detail.sellingShipQty = parseFloat(detailRaw.SellingShipQty || "0") || 0;
+            detail.docUnitPrice = parseFloat(detailRaw.DocUnitPrice || "0") || 0;
+            detail.docExtPrice = parseFloat(detailRaw.DocExtPrice || "0") || 0;
+            detail.taxPercent = parseFloat(detailRaw.TaxPercent || "0") || 0;
+            detail.id = parseInt(`${epicorInvoice.InvoiceNum}${detailRaw.InvoiceLine || Math.random().toString(36).substring(2, 8)}`, 36);
             detail.invoiceId = invoice.id;
             return detail;
           });
@@ -421,7 +417,7 @@ export class InvoiceService {
 
   /**
    * Submit invoice to Baiwang for e-invoicing
-   * @param id Invoice ID
+   * @param id Invoice ID (ERP Invoice ID)
    * @param submittedBy User who submitted the invoice
    * @param tenantId Tenant ID
    * @param authorization Authorization header from request
@@ -432,41 +428,51 @@ export class InvoiceService {
       // 初始化百望服务，获取租户特定配置
       await this.baiwangService.initialize(tenantId, authorization);
 
-      // 获取发票和明细
-      const invoice = await this.findOne(id);
-      const details = await this.invoiceDetailRepository.find({
-        where: {
-          invoice: {
-            erpInvoiceId: id
-          }
-        }
-      });
+      // 获取Epicor配置
+      const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice', authorization);
+      const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
 
-      if (!details.length) {
-        throw new Error('Cannot submit invoice without details');
+      if (!serverSettings || !serverSettings.serverBaseAPI || !serverSettings.companyID || !serverSettings.userAccount) {
+        this.logger.error('Epicor server settings are missing or incomplete from tenant configuration.');
+        throw new Error('Epicor server configuration is incomplete.');
+      }
+
+      if (serverSettings.password === undefined) {
+        serverSettings.password = '';
+      }
+
+      // 直接从Epicor API获取发票数据
+      const epicorInvoiceData = await this.epicorService.getInvoiceById(serverSettings, id);
+
+      if (!epicorInvoiceData) {
+        throw new Error(`Invoice with ID ${id} not found in Epicor`);
       }
 
       // 获取公司信息配置
       const companyInfo = await this.tenantConfigService.getCompanyInfo(tenantId, authorization);
 
       // Generate order number using UUID (shortened) and include erpInvoiceId for easier retrieval in callback
-      const orderNo = `ORD-${uuidv4().substring(0, 8)}-${invoice.erpInvoiceId}`;
+      const orderNo = `ORD-${uuidv4().substring(0, 8)}-${id}`;
 
-      // Map invoice details to Baiwang format
-      const invoiceDetailList = details.map(detail => ({
-        goodsTaxRate: String((detail.taxPercent ? parseFloat(String(detail.taxPercent)) / 100 : 0.13).toFixed(2)),
-        goodsTotalPrice: String(detail.docExtPrice || '0'),
-        goodsPrice: String(detail.docUnitPrice || '0'),
-        goodsQuantity: String(detail.sellingShipQty || '1'),
-        goodsUnit: detail.salesUm || '',
-        goodsName: detail.lineDescription || 'Product',
+      // Map invoice details to Baiwang format from Epicor data
+      const invoiceDetailList = (epicorInvoiceData.InvcDtls || []).map(detail => ({
+        goodsTaxRate: String((detail.TaxPercent ? parseFloat(String(detail.TaxPercent)) / 100 : 0.13).toFixed(2)),
+        goodsTotalPrice: String(detail.DocExtPrice || '0'),
+        goodsPrice: String(detail.DocUnitPrice || '0'),
+        goodsQuantity: String(detail.SellingShipQty || '1'),
+        goodsUnit: detail.SalesUM || '',
+        goodsName: detail.LineDesc || 'Product',
       }));
+
+      if (!invoiceDetailList.length) {
+        throw new Error('Cannot submit invoice without details');
+      }
 
       // Create Baiwang request
       const baiwangRequest = {
         buyerTelephone: '',
         priceTaxMark: '0',
-        callBackUrl: 'http://8.219.189.158:81/e-invoice/api/invoice/callback',
+        callBackUrl: 'https://einvoice-test.rg-experience.com/api/invoice/callback',
         invoiceDetailList,
         sellerAddress: companyInfo.address || 'Environment issue immediately',
         buyerAddress: 'Test address',
@@ -475,19 +481,24 @@ export class InvoiceService {
         taxNo: companyInfo.taxNo || '338888888888SMB',
         orderDateTime: new Date().toISOString().split('T')[0] + ' 10:00:00',
         orderNo,
-        buyerName: invoice.customerName || 'Test Company',
+        buyerName: epicorInvoiceData.CustomerName || 'Test Company',
         invoiceTypeCode: '02',
         sellerBankName: companyInfo.bankName || 'Test Bank',
-        remarks: invoice.invoiceComment || 'Invoice',
+        remarks: epicorInvoiceData.InvoiceComment || 'Invoice',
       };
 
       // Submit to Baiwang
       const result = await this.baiwangService.submitInvoice(baiwangRequest);
 
-      // Update invoice status and submitter
-      await this.invoiceRepository.update(invoice.id, {
-        status: 'PENDING',
-        submittedBy,
+      // Update invoice status in Epicor directly
+      await this.epicorService.updateInvoiceStatus(serverSettings, id, {
+        ELIEInvoice: true,
+        ELIEInvStatus: 0, // 0 = PENDING
+        ELIEInvUpdatedBy: submittedBy,
+        ELIEInvException: '',
+        ELIEInvUpdatedOn: new Date().toISOString(),
+        EInvRefNum: orderNo,
+        RowMod: 'U'
       });
 
       return {
@@ -498,11 +509,24 @@ export class InvoiceService {
     } catch (error) {
       this.logger.error(`Error submitting invoice ${id}: ${error.message}`, error.stack);
 
-      // Update invoice status to ERROR
-      await this.invoiceRepository.update(id, {
-        status: 'ERROR',
-        comment: `Error: ${error.message}`,
-      });
+      // Try to update invoice status to ERROR in Epicor
+      try {
+        const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice', authorization);
+        const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
+
+        if (serverSettings) {
+          await this.epicorService.updateInvoiceStatus(serverSettings, id, {
+            ELIEInvoice: true,
+            ELIEInvStatus: 2, // 2 = ERROR
+            ELIEInvUpdatedBy: submittedBy,
+            ELIEInvException: `Error: ${error.message}`,
+            ELIEInvUpdatedOn: new Date().toISOString(),
+            RowMod: 'U'
+          });
+        }
+      } catch (updateError) {
+        this.logger.error(`Failed to update invoice status in Epicor: ${updateError.message}`);
+      }
 
       throw error;
     }
@@ -546,28 +570,34 @@ export class InvoiceService {
           }
         }
 
-        // If we couldn't extract from orderNo, try to find by other means
-        let invoice;
-        if (erpInvoiceId) {
-          invoice = await this.invoiceRepository.findOne({
-            where: { erpInvoiceId }
-          });
+        if (!erpInvoiceId) {
+          throw new Error(`Could not extract erpInvoiceId from orderNo: ${orderNo}`);
         }
 
-        if (!invoice) {
-          throw new Error(`Could not find invoice with orderNo: ${orderNo}`);
+        // Get Epicor configuration from default tenant (we'll need to enhance this to get the correct tenant)
+        // For now, we'll use a default configuration approach
+        const tenantId = 'default'; // This should be enhanced to get the correct tenant
+        const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice');
+        const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
+
+        if (!serverSettings) {
+          throw new Error('Epicor server configuration not found');
         }
 
-        // Update invoice with e-invoice information
-        await this.invoiceRepository.update(invoice.id, {
-          status: 'SUBMITTED',
-          eInvoiceId: data.serialNo, // serialNo as E-Invoice ID
-          eInvoiceDate: new Date(data.invoiceTime), // Invoice time as E-Invoice Date
-          submittedBy: data.drawer || invoice.submittedBy, // Drawer as submitter
-          eInvoicePdf: data.pdfUrl, // PDF URL
-          orderNumber: orderNo, // Store the orderNo
-          digitInvoiceNo: data.digitInvoiceNo,
-          comment: `E-Invoice issued successfully: ${data.statusMessage}`
+        if (serverSettings.password === undefined) {
+          serverSettings.password = '';
+        }
+
+        // Update invoice with e-invoice information in Epicor
+        await this.epicorService.updateInvoiceStatus(serverSettings, erpInvoiceId, {
+          ELIEInvoice: true,
+          ELIEInvStatus: 1, // 1 = SUBMITTED/SUCCESS
+          ELIEInvUpdatedBy: data.drawer || 'system',
+          ELIEInvException: `E-Invoice issued successfully: ${data.statusMessage}`,
+          ELIEInvUpdatedOn: new Date().toISOString(),
+          EInvRefNum: orderNo,
+          ELIEInvID: data.serialNo, // Use serialNo as E-Invoice ID
+          RowMod: 'U'
         });
 
         return {
@@ -598,15 +628,24 @@ export class InvoiceService {
         }
 
         if (erpInvoiceId) {
-          const invoice = await this.invoiceRepository.findOne({
-            where: { erpInvoiceId }
-          });
+          // Get Epicor configuration
+          const tenantId = 'default'; // This should be enhanced to get the correct tenant
+          const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice');
+          const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
 
-          if (invoice) {
-            await this.invoiceRepository.update(invoice.id, {
-              status: 'ERROR',
-              orderNumber: data.orderNo, // Store the orderNo even for failed attempts
-              comment: `E-Invoice error: ${data.statusMessage || data.errorMessage || 'Unknown error'}`
+          if (serverSettings) {
+            if (serverSettings.password === undefined) {
+              serverSettings.password = '';
+            }
+
+            await this.epicorService.updateInvoiceStatus(serverSettings, erpInvoiceId, {
+              ELIEInvoice: true,
+              ELIEInvStatus: 2, // 2 = ERROR
+              ELIEInvUpdatedBy: 'system',
+              ELIEInvException: `E-Invoice error: ${data.statusMessage || data.errorMessage || 'Unknown error'}`,
+              ELIEInvUpdatedOn: new Date().toISOString(),
+              EInvRefNum: data.orderNo,
+              RowMod: 'U'
             });
           }
         }
@@ -646,103 +685,70 @@ export class InvoiceService {
       // Sync invoices from Epicor
       const epicorResponse = await this.epicorService.syncInvoices(lastSyncDate);
 
-      // Group invoices by InvcDtl_InvoiceNum
-      const groupedInvoices = this.groupInvoicesByNumber(epicorResponse.value);
-
-      // Process each invoice group
-      const processedInvoices: { erpInvoiceId: number; status: string; error?: string }[] = [];
-
-      for (const [invoiceNum, invoiceDetails] of Object.entries(groupedInvoices)) {
+      // Process each invoice directly (no grouping needed with new API structure)
+      const savedInvoices: Array<{ erpInvoiceId: number; status: string }> = [];
+      for (const epicorInvoice of epicorResponse.value as unknown as EpicorInvoiceHeader[]) {
         try {
-          // Use the first item for header information
-          const firstInvoice = invoiceDetails[0];
-
           // Check if invoice already exists
           const existingInvoice = await this.invoiceRepository.findOne({
-            where: { erpInvoiceId: firstInvoice.InvcHead_InvoiceNum },
+            where: { erpInvoiceId: epicorInvoice.InvoiceNum },
           });
 
           if (existingInvoice) {
-            this.logger.log(`Invoice ${firstInvoice.InvcHead_InvoiceNum} already exists. Skipping.`);
+            this.logger.log(`Invoice ${epicorInvoice.InvoiceNum} already exists. Skipping.`);
             continue;
           }
 
-          // Create new invoice
-          const newInvoice = this.invoiceRepository.create({
-            erpInvoiceId: firstInvoice.InvcHead_InvoiceNum,
-            erpInvoiceDescription: firstInvoice.InvcHead_Description,
-            customerName: firstInvoice.Customer_Name,
-            customerResaleId: firstInvoice.Customer_ResaleID,
-            invoiceComment: firstInvoice.InvcHead_InvoiceComment,
-            orderNumber: firstInvoice.OrderHed_OrderNum?.toString() || '',
-            orderDate: firstInvoice.OrderHed_OrderDate ? new Date(firstInvoice.OrderHed_OrderDate) : null,
-            poNumber: firstInvoice.OrderHed_PONum || '',
+          // 创建发票记录
+          const invoice = this.invoiceRepository.create({
+            erpInvoiceId: epicorInvoice.InvoiceNum,
+            erpInvoiceDescription: epicorInvoice.Description || '',
+            fapiaoType: epicorInvoice.CNTaxInvoiceType?.toString() || '',
+            customerName: epicorInvoice.CustomerName || '',
+            customerResaleId: epicorInvoice.CustNum?.toString() || '',
+            invoiceComment: epicorInvoice.InvoiceComment || '',
+            orderNumber: epicorInvoice.OrderNum?.toString() || '',
+            orderDate: epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : null,
+            poNumber: epicorInvoice.PONum || '',
             status: 'PENDING',
           });
 
-          const savedInvoice = await this.invoiceRepository.save(newInvoice);
-          let pendingInsertedInvoiceDetails: InvoiceDetail[] = [];
-          // Create invoice details for each detail line
-          for (const detail of invoiceDetails) {
-            pendingInsertedInvoiceDetails.push(this.invoiceDetailRepository.create({
-              invoiceId: savedInvoice.id,
-              erpInvoiceId: detail.InvcDtl_InvoiceNum,
-              lineDescription: detail.InvcDtl_LineDesc || '',
-              commodityCode: detail.InvcDtl_CommodityCode || '',
-              uomDescription: detail.UOMClass_Description || '',
-              salesUm: detail.InvcDtl_SalesUM || '',
-              sellingShipQty: parseFloat(detail.InvcDtl_SellingShipQty || "0") || 0,
-              docUnitPrice: parseFloat(detail.InvcDtl_DocUnitPrice || "0") || 0,
-              docExtPrice: parseFloat(detail.InvcDtl_DocExtPrice || "0") || 0,
-              taxPercent: parseFloat(detail.InvcTax_Percent || "0") || 0,
-            }));
-          }
-          await this.invoiceDetailRepository.save(pendingInsertedInvoiceDetails);
+          const savedInvoice = await this.invoiceRepository.save(invoice);
 
-          processedInvoices.push({
+          // 创建发票明细
+          const invoiceDetails = (epicorInvoice.InvcDtls || []).map(detailRaw => this.invoiceDetailRepository.create({
+            invoiceId: savedInvoice.id,
+            erpInvoiceId: detailRaw.InvoiceNum,
+            lineDescription: detailRaw.LineDesc || '',
+            commodityCode: detailRaw.CommodityCode || '',
+            uomDescription: detailRaw.IUM || '',
+            salesUm: detailRaw.SalesUM || '',
+            sellingShipQty: parseFloat(detailRaw.SellingShipQty || "0") || 0,
+            docUnitPrice: parseFloat(detailRaw.DocUnitPrice || "0") || 0,
+            docExtPrice: parseFloat(detailRaw.DocExtPrice || "0") || 0,
+            taxPercent: parseFloat(detailRaw.TaxPercent || "0") || 0,
+          }));
+
+          await this.invoiceDetailRepository.save(invoiceDetails);
+
+          savedInvoices.push({
             erpInvoiceId: savedInvoice.erpInvoiceId,
             status: 'CREATED',
           });
         } catch (error) {
-          this.logger.error(`Error processing invoice ${invoiceNum}: ${error.message}`, error.stack);
-          processedInvoices.push({
-            erpInvoiceId: parseInt(invoiceNum),
-            status: 'ERROR',
-            error: error.message,
-          });
+          this.logger.error(`Error processing invoice ${epicorInvoice.InvoiceNum} during resync: ${error.message}`, error.stack);
         }
       }
 
       return {
         success: true,
-        message: `Synced ${processedInvoices.length} invoices from Epicor`,
-        data: processedInvoices,
+        message: `Synced ${savedInvoices.length} invoices from Epicor`,
+        data: savedInvoices,
       };
     } catch (error) {
       this.logger.error(`Error syncing from Epicor: ${error.message}`, error.stack);
       throw error;
     }
-  }
-
-  /**
-   * Group invoice details by invoice number
-   * @param invoices Array of EpicorInvoice objects
-   * @returns Object with invoice numbers as keys and arrays of invoice details as values
-   */
-  private groupInvoicesByNumber(invoices: EpicorInvoice[]): Record<string, EpicorInvoice[]> {
-    const grouped: Record<string, EpicorInvoice[]> = {};
-
-    for (const invoice of invoices) {
-      const invoiceNum = invoice.InvcHead_InvoiceNum.toString();
-
-      if (!grouped[invoiceNum]) {
-        grouped[invoiceNum] = [];
-      }
-
-      grouped[invoiceNum].push(invoice);
-    }
-
-    return grouped;
   }
 
   /**
@@ -928,6 +934,19 @@ export class InvoiceService {
       // 获取公司信息配置
       const companyInfo = await this.tenantConfigService.getCompanyInfo(tenantId, authorization);
 
+      // 获取Epicor配置
+      const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice', authorization);
+      const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
+
+      if (!serverSettings || !serverSettings.serverBaseAPI || !serverSettings.companyID || !serverSettings.userAccount) {
+        this.logger.error('Epicor server settings are missing or incomplete from tenant configuration.');
+        throw new Error('Epicor server configuration is incomplete.');
+      }
+
+      if (serverSettings.password === undefined) {
+        serverSettings.password = '';
+      }
+
       const { erpInvoiceIds, submittedBy } = mergeDto;
       this.logger.log(`Merging invoices: ${erpInvoiceIds.join(', ')} by ${submittedBy}`);
 
@@ -935,48 +954,68 @@ export class InvoiceService {
         throw new Error('At least one invoice ID must be provided');
       }
 
-      // 获取所有要合并的发票
-      const invoices: Invoice[] = [];
-      for (const id of erpInvoiceIds) {
-        try {
-          const invoice = await this.findByErpInvoiceId(id);
-          invoices.push(invoice);
-        } catch (error) {
-          this.logger.error(`Could not find invoice with ID ${id}: ${error.message}`);
-          throw new Error(`Invoice with ID ${id} not found`);
-        }
+      // 使用新的Epicor Kinetic API一次性获取所有要合并的发票
+      // 构建过滤条件：InvoiceNum eq 1 or InvoiceNum eq 101 or ...
+      const filterConditions = erpInvoiceIds.map(id => `InvoiceNum eq ${id}`).join(' or ');
+
+      this.logger.log(`Fetching invoices with filter: ${filterConditions}`);
+
+      const url = `${serverSettings.serverBaseAPI}/Erp.BO.ARInvoiceSvc/ARInvoices?$expand=InvcDtls&$filter=${encodeURIComponent(filterConditions)}`;
+
+      const headers = {
+        'Accept': 'application/json',
+        'Authorization': `Basic ${Buffer.from(`${serverSettings.userAccount}:${serverSettings.password || ''}`).toString('base64')}`,
+      };
+
+      const response = await lastValueFrom(
+        this.httpService.get(url, { headers })
+      );
+
+      const invoicesData = response.data;
+      if (!invoicesData || !invoicesData.value || !Array.isArray(invoicesData.value)) {
+        throw new Error('Invalid response from Epicor API');
+      }
+
+      const invoices = invoicesData.value as EpicorInvoiceHeader[];
+
+      // 验证是否找到了所有请求的发票
+      const foundInvoiceIds = invoices.map(inv => inv.InvoiceNum);
+      const missingInvoiceIds = erpInvoiceIds.filter(id => !foundInvoiceIds.includes(id));
+
+      if (missingInvoiceIds.length > 0) {
+        throw new Error(`Invoices not found in Epicor: ${missingInvoiceIds.join(', ')}`);
       }
 
       // 验证所有发票是否属于同一客户
-      const firstCustomer = invoices[0].customerName;
-      const firstCustomerResaleId = invoices[0].customerResaleId;
+      const firstCustomer = invoices[0].CustomerName;
+      const firstCustomerNum = invoices[0].CustNum;
       for (const invoice of invoices) {
-        if (invoice.customerName !== firstCustomer) {
-          throw new Error(`All invoices must be from the same customer. Expected ${firstCustomer}, got ${invoice.customerName}`);
+        if (invoice.CustomerName !== firstCustomer) {
+          throw new Error(`All invoices must be from the same customer. Expected ${firstCustomer}, got ${invoice.CustomerName}`);
         }
-        if (invoice.customerResaleId !== firstCustomerResaleId) {
-          throw new Error(`All invoices must have the same customer resale ID. Expected ${firstCustomerResaleId}, got ${invoice.customerResaleId}`);
+        if (invoice.CustNum !== firstCustomerNum) {
+          throw new Error(`All invoices must have the same customer number. Expected ${firstCustomerNum}, got ${invoice.CustNum}`);
         }
-        if (invoice.status === 'SUBMITTED') {
-          throw new Error(`Invoice with ID ${invoice.erpInvoiceId} has already been submitted`);
+        // Check if invoice has already been submitted (ELIEInvStatus = 1)
+        if (invoice.ELIEInvStatus === 1) {
+          throw new Error(`Invoice with ID ${invoice.InvoiceNum} has already been submitted`);
         }
       }
 
       // 收集所有发票明细
-      let allDetails: InvoiceDetail[] = [];
+      let allDetails: any[] = [];
       for (const invoice of invoices) {
-        const details = await this.invoiceDetailRepository.find({
-          where: { invoiceId: invoice.id }
-        });
-        allDetails = [...allDetails, ...details];
+        if (invoice.InvcDtls && invoice.InvcDtls.length > 0) {
+          allDetails = [...allDetails, ...invoice.InvcDtls];
+        }
       }
 
       if (!allDetails.length) {
         throw new Error('No invoice details found for the selected invoices');
       }
 
-      // 合并类似商品行
-      const mergedItems = this.mergeInvoiceDetails(allDetails);
+      // 合并类似商品行 - 需要适配Epicor数据结构
+      const mergedItems = this.mergeEpicorInvoiceDetails(allDetails);
 
       // 计算合并后的总金额
       const totalAmount = mergedItems.reduce((sum, item) => sum + Number(item.goodsTotalPrice), 0);
@@ -988,7 +1027,7 @@ export class InvoiceService {
       const baiwangRequest = {
         buyerTelephone: '',
         priceTaxMark: '0',
-        callBackUrl: 'http://8.219.189.158:81/e-invoice/api/invoice/callback',
+        callBackUrl: 'https://einvoice-test.rg-experience.com/api/invoice/callback',
         invoiceDetailList: mergedItems,
         sellerAddress: companyInfo.address || 'Environment issue immediately',
         buyerAddress: 'Test address',
@@ -1006,14 +1045,21 @@ export class InvoiceService {
       // 提交到百望
       const result = await this.baiwangService.submitInvoice(baiwangRequest);
 
-      // 更新所有发票状态
+      // 更新所有发票状态在Epicor中
       for (const invoice of invoices) {
-        await this.invoiceRepository.update(invoice.id, {
-          status: 'PENDING',
-          submittedBy,
-          orderNumber: orderNo,
-          comment: `Merged with invoices: ${erpInvoiceIds.filter(id => id !== invoice.erpInvoiceId).join(', ')}`,
-        });
+        try {
+          await this.epicorService.updateInvoiceStatus(serverSettings, invoice.InvoiceNum, {
+            ELIEInvoice: true,
+            ELIEInvStatus: 0, // 0 = PENDING
+            ELIEInvUpdatedBy: submittedBy,
+            ELIEInvException: `Merged with invoices: ${erpInvoiceIds.filter(id => id !== invoice.InvoiceNum).join(', ')}`,
+            ELIEInvUpdatedOn: new Date().toISOString(),
+            EInvRefNum: orderNo,
+            RowMod: 'U'
+          });
+        } catch (error) {
+          this.logger.error(`Could not update invoice ${invoice.InvoiceNum} status in Epicor: ${error.message}`);
+        }
       }
 
       return {
@@ -1072,33 +1118,35 @@ export class InvoiceService {
           throw new Error(`No invoice IDs found in order number: ${orderNo}`);
         }
 
-        // 查找所有相关发票
-        const invoices: Invoice[] = [];
+        // Get Epicor configuration
+        const tenantId = 'default'; // This should be enhanced to get the correct tenant
+        const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice');
+        const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
+
+        if (!serverSettings) {
+          throw new Error('Epicor server configuration not found');
+        }
+
+        if (serverSettings.password === undefined) {
+          serverSettings.password = '';
+        }
+
+        // 更新所有发票的电子发票信息在Epicor中
         for (const id of erpInvoiceIds) {
           try {
-            const invoice = await this.findByErpInvoiceId(id);
-            invoices.push(invoice);
+            await this.epicorService.updateInvoiceStatus(serverSettings, id, {
+              ELIEInvoice: true,
+              ELIEInvStatus: 1, // 1 = SUBMITTED/SUCCESS
+              ELIEInvUpdatedBy: data.drawer || 'system',
+              ELIEInvException: `E-Invoice issued successfully for merged invoices: ${erpInvoiceIds.join(', ')}`,
+              ELIEInvUpdatedOn: new Date().toISOString(),
+              EInvRefNum: orderNo,
+              ELIEInvID: data.serialNo, // Use serialNo as E-Invoice ID
+              RowMod: 'U'
+            });
           } catch (error) {
-            this.logger.error(`Could not find invoice with ID ${id}: ${error.message}`);
+            this.logger.error(`Could not update invoice with ID ${id} in Epicor: ${error.message}`);
           }
-        }
-
-        if (!invoices.length) {
-          throw new Error(`Could not find any invoices with order number: ${orderNo}`);
-        }
-
-        // 更新所有发票的电子发票信息
-        for (const invoice of invoices) {
-          await this.invoiceRepository.update(invoice.id, {
-            status: 'SUBMITTED',
-            eInvoiceId: data.serialNo, // 使用serialNo作为电子发票ID
-            eInvoiceDate: new Date(data.invoiceTime), // 使用invoiceTime作为电子发票日期
-            submittedBy: data.drawer || invoice.submittedBy, // 使用drawer作为提交者
-            eInvoicePdf: data.pdfUrl, // PDF URL
-            orderNumber: orderNo, // 存储orderNo
-            digitInvoiceNo: data.digitInvoiceNo,
-            comment: `E-Invoice issued successfully for merged invoices: ${erpInvoiceIds.join(', ')}`
-          });
         }
 
         return {
@@ -1128,17 +1176,32 @@ export class InvoiceService {
             this.logger.warn(`Could not extract erpInvoiceIds from : ${orderNo}`);
           }
 
-          // 更新所有相关发票的状态
+          // 更新所有相关发票的状态在Epicor中
           if (erpInvoiceIds.length) {
-            for (const id of erpInvoiceIds) {
-              try {
-                const invoice = await this.findByErpInvoiceId(id);
-                await this.invoiceRepository.update(invoice.id, {
-                  status: 'ERROR',
-                  comment: `Error in merged invoice: ${data.statusMessage}`,
-                });
-              } catch (error) {
-                this.logger.error(`Could not update invoice with ID ${id}: ${error.message}`);
+            // Get Epicor configuration
+            const tenantId = 'default'; // This should be enhanced to get the correct tenant
+            const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice');
+            const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
+
+            if (serverSettings) {
+              if (serverSettings.password === undefined) {
+                serverSettings.password = '';
+              }
+
+              for (const id of erpInvoiceIds) {
+                try {
+                  await this.epicorService.updateInvoiceStatus(serverSettings, id, {
+                    ELIEInvoice: true,
+                    ELIEInvStatus: 2, // 2 = ERROR
+                    ELIEInvUpdatedBy: 'system',
+                    ELIEInvException: `Error in merged invoice: ${data.statusMessage}`,
+                    ELIEInvUpdatedOn: new Date().toISOString(),
+                    EInvRefNum: orderNo,
+                    RowMod: 'U'
+                  });
+                } catch (error) {
+                  this.logger.error(`Could not update invoice with ID ${id} in Epicor: ${error.message}`);
+                }
               }
             }
           }
@@ -1157,35 +1220,35 @@ export class InvoiceService {
   }
 
   /**
-   * 合并类似的发票明细行
-   * @param details 发票明细列表
+   * 合并类似的发票明细行 (Epicor数据结构)
+   * @param details Epicor发票明细列表
    * @returns 合并后的百望发票明细列表
    */
-  private mergeInvoiceDetails(details: InvoiceDetail[]): any[] {
+  private mergeEpicorInvoiceDetails(details: any[]): any[] {
     // 用于存储合并后的商品行，键为商品代码+单价+税率
     const mergedMap: Record<string, any> = {};
 
     for (const detail of details) {
-      // 创建唯一键
-      const key = `${detail.commodityCode || ''}-${detail.docUnitPrice || 0}-${detail.taxPercent || 0}`;
+      // 创建唯一键 - 使用Epicor字段名
+      const key = `${detail.CommodityCode || ''}-${detail.DocUnitPrice || 0}-${detail.TaxPercent || 0}`;
 
       if (!mergedMap[key]) {
         // 如果这个商品行还没有合并过，创建一个新的
         mergedMap[key] = {
-          goodsTaxRate: String((detail.taxPercent ? parseFloat(String(detail.taxPercent)) / 100 : 0.13).toFixed(2)),
-          goodsTotalPrice: String(detail.docExtPrice || '0'),
-          goodsPrice: String(detail.docUnitPrice || '0'),
-          goodsQuantity: String(detail.sellingShipQty || '1'),
-          goodsUnit: detail.salesUm || '',
-          goodsName: detail.lineDescription || 'Product',
-          _originalQuantity: parseFloat(String(detail.sellingShipQty)) || 1,
-          _originalTotal: parseFloat(String(detail.docExtPrice)) || 0,
+          goodsTaxRate: String((detail.TaxPercent ? parseFloat(String(detail.TaxPercent)) / 100 : 0.13).toFixed(2)),
+          goodsTotalPrice: String(detail.DocExtPrice || '0'),
+          goodsPrice: String(detail.DocUnitPrice || '0'),
+          goodsQuantity: String(detail.SellingShipQty || '1'),
+          goodsUnit: detail.SalesUM || '',
+          goodsName: detail.LineDesc || 'Product',
+          _originalQuantity: parseFloat(String(detail.SellingShipQty)) || 1,
+          _originalTotal: parseFloat(String(detail.DocExtPrice)) || 0,
         };
       } else {
         // 如果已经有了，增加数量和总价
         const currentItem = mergedMap[key];
-        const additionalQty = parseFloat(String(detail.sellingShipQty)) || 1;
-        const additionalTotal = parseFloat(String(detail.docExtPrice)) || 0;
+        const additionalQty = parseFloat(String(detail.SellingShipQty)) || 1;
+        const additionalTotal = parseFloat(String(detail.DocExtPrice)) || 0;
 
         currentItem._originalQuantity += additionalQty;
         currentItem._originalTotal += additionalTotal;
@@ -1201,6 +1264,18 @@ export class InvoiceService {
       const { _originalQuantity, _originalTotal, ...rest } = item;
       return rest;
     });
+  }
+
+  /**
+   * 合并类似的发票明细行 (本地数据库结构) - 保留用于向后兼容
+   * @param details 发票明细列表
+   * @returns 合并后的百望发票明细列表
+   */
+  private mergeInvoiceDetails(details: InvoiceDetail[]): any[] {
+    // Implementation of the method
+    // This method is kept for backward compatibility
+    // It should be implemented to merge details based on local database structure
+    throw new Error('Method not implemented');
   }
 
   /**
@@ -1251,43 +1326,49 @@ export class InvoiceService {
         );
 
         const epicorInvoicesRaw = epicorData.value || [];
-        const groupedEpicorInvoices = this.groupInvoicesByNumber(epicorInvoicesRaw);
 
-        // 处理每个发票组并保存到数据库
+        // Process each invoice directly (no grouping needed with new API structure)
         const savedInvoices: Array<{ erpInvoiceId: number; status: string }> = [];
-        for (const invoiceNumStr in groupedEpicorInvoices) {
+        for (const epicorInvoice of epicorInvoicesRaw as unknown as EpicorInvoiceHeader[]) {
           try {
-            const invoiceDetailsRaw = groupedEpicorInvoices[invoiceNumStr];
-            const firstDetailRaw = invoiceDetailsRaw[0];
+            // Check if invoice already exists
+            const existingInvoice = await this.invoiceRepository.findOne({
+              where: { erpInvoiceId: epicorInvoice.InvoiceNum },
+            });
+
+            if (existingInvoice) {
+              this.logger.log(`Invoice ${epicorInvoice.InvoiceNum} already exists. Skipping.`);
+              continue;
+            }
 
             // 创建发票记录
             const invoice = this.invoiceRepository.create({
-              erpInvoiceId: firstDetailRaw.InvcHead_InvoiceNum,
-              erpInvoiceDescription: firstDetailRaw.InvcHead_Description,
-              fapiaoType: firstDetailRaw.InvcHead_CNTaxInvoiceType?.toString() || '',
-              customerName: firstDetailRaw.Customer_Name,
-              customerResaleId: firstDetailRaw.Customer_ResaleID,
-              invoiceComment: firstDetailRaw.InvcHead_InvoiceComment,
-              orderNumber: firstDetailRaw.OrderHed_OrderNum?.toString() || '',
-              orderDate: firstDetailRaw.OrderHed_OrderDate && firstDetailRaw.OrderHed_OrderDate.trim() !== '' ? new Date(firstDetailRaw.OrderHed_OrderDate) : null,
-              poNumber: firstDetailRaw.OrderHed_PONum || '',
+              erpInvoiceId: epicorInvoice.InvoiceNum,
+              erpInvoiceDescription: epicorInvoice.Description || '',
+              fapiaoType: epicorInvoice.CNTaxInvoiceType?.toString() || '',
+              customerName: epicorInvoice.CustomerName || '',
+              customerResaleId: epicorInvoice.CustNum?.toString() || '',
+              invoiceComment: epicorInvoice.InvoiceComment || '',
+              orderNumber: epicorInvoice.OrderNum?.toString() || '',
+              orderDate: epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : null,
+              poNumber: epicorInvoice.PONum || '',
               status: 'PENDING',
             });
 
             const savedInvoice = await this.invoiceRepository.save(invoice);
 
             // 创建发票明细
-            const invoiceDetails = invoiceDetailsRaw.map(detailRaw => this.invoiceDetailRepository.create({
+            const invoiceDetails = (epicorInvoice.InvcDtls || []).map(detailRaw => this.invoiceDetailRepository.create({
               invoiceId: savedInvoice.id,
-              erpInvoiceId: detailRaw.InvcDtl_InvoiceNum,
-              lineDescription: detailRaw.InvcDtl_LineDesc || '',
-              commodityCode: detailRaw.InvcDtl_CommodityCode || '',
-              uomDescription: detailRaw.UOMClass_Description || '',
-              salesUm: detailRaw.InvcDtl_SalesUM || '',
-              sellingShipQty: parseFloat(detailRaw.InvcDtl_SellingShipQty || "0") || 0,
-              docUnitPrice: parseFloat(detailRaw.InvcDtl_DocUnitPrice || "0") || 0,
-              docExtPrice: parseFloat(detailRaw.InvcDtl_DocExtPrice || "0") || 0,
-              taxPercent: parseFloat(detailRaw.InvcTax_Percent || "0") || 0,
+              erpInvoiceId: detailRaw.InvoiceNum,
+              lineDescription: detailRaw.LineDesc || '',
+              commodityCode: detailRaw.CommodityCode || '',
+              uomDescription: detailRaw.IUM || '',
+              salesUm: detailRaw.SalesUM || '',
+              sellingShipQty: parseFloat(detailRaw.SellingShipQty || "0") || 0,
+              docUnitPrice: parseFloat(detailRaw.DocUnitPrice || "0") || 0,
+              docExtPrice: parseFloat(detailRaw.DocExtPrice || "0") || 0,
+              taxPercent: parseFloat(detailRaw.TaxPercent || "0") || 0,
             }));
 
             await this.invoiceDetailRepository.save(invoiceDetails);
@@ -1297,7 +1378,7 @@ export class InvoiceService {
               status: 'CREATED',
             });
           } catch (error) {
-            this.logger.error(`Error processing invoice ${invoiceNumStr} during resync: ${error.message}`, error.stack);
+            this.logger.error(`Error processing invoice ${epicorInvoice.InvoiceNum} during resync: ${error.message}`, error.stack);
           }
         }
 

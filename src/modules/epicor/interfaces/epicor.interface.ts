@@ -37,7 +37,56 @@ export interface EpicorInvoice {
   SysRowID?: string;
 }
 
+// New interface for the updated Epicor API response structure
+export interface EpicorInvoiceDetail {
+  Company: string;
+  InvoiceNum: number;
+  InvoiceLine: number;
+  LineType: string;
+  LineDesc: string;
+  IUM: string;
+  UnitPrice: string;
+  DocUnitPrice: string;
+  ExtPrice: string;
+  DocExtPrice: string;
+  OurShipQty: string;
+  SellingShipQty: string;
+  SalesUM: string;
+  CommodityCode: string;
+  TaxPercent?: string;
+  [key: string]: any; // For additional properties
+}
+
+export interface EpicorInvoiceHeader {
+  Company: string;
+  InvoiceNum: number;
+  InvoiceType: string;
+  OrderNum: number;
+  CustNum: number;
+  PONum: string;
+  InvoiceDate: string;
+  DueDate: string;
+  InvoiceComment: string;
+  InvoiceAmt: string;
+  DocInvoiceAmt: string;
+  CurrencyCode: string;
+  CustomerName: string;
+  CNTaxInvoiceType?: number;
+  ELIEInvID?: string;
+  ELIEInvStatus?: number;
+  ELIEInvUpdatedBy?: string;
+  ELIEInvUpdatedOn?: string;
+  Description?: string;
+  InvcDtls: EpicorInvoiceDetail[];
+  [key: string]: any; // For additional properties
+}
+
 export interface EpicorResponse {
   'odata.metadata': string;
   value: EpicorInvoice[];
+}
+
+export interface EpicorNewResponse {
+  'odata.metadata': string;
+  value: EpicorInvoiceHeader[];
 } 
