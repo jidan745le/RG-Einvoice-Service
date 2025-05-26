@@ -39,16 +39,16 @@ export class Invoice {
   @Column({ name: 'digit_invoice_no', nullable: true })
   digitInvoiceNo: string;
 
-  @Column({ name: 'e_invoice_id', nullable: true })
+  @Column({ name: 'e_invoice_id', nullable: true, type: 'varchar' })
   eInvoiceId: string | null;
 
-  @Column({ name: 'e_invoice_pdf', nullable: true })
+  @Column({ name: 'e_invoice_pdf', nullable: true, type: 'varchar' })
   eInvoicePdf: string;
 
   @Column({ name: 'e_invoice_date', type: 'date', nullable: true })
   eInvoiceDate: Date | null;
 
-  @Column({ name: 'submitted_by', nullable: true })
+  @Column({ name: 'submitted_by', nullable: true, type: 'varchar' })
   submittedBy: string | null;
 
   @Column({ name: 'order_date', type: 'date', nullable: true })
@@ -57,7 +57,7 @@ export class Invoice {
   @Column({ name: 'po_number', nullable: true })
   poNumber: string;
 
-  @Column({ name: 'comment', nullable: true })
+  @Column({ name: 'comment', nullable: true, type: 'varchar' })
   comment: string | null;
 
   @Column({ nullable: true })
