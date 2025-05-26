@@ -522,6 +522,8 @@ export class InvoiceService {
         this.logger.warn(`No authorization provided for invoice ${id}, callback processing may fail`);
       }
 
+      this.logger.log(`data0: ${JSON.stringify(this.authorizationCache)}`);
+
       // Map invoice details to Baiwang format from Epicor data
       const invoiceDetailList = (epicorInvoiceData.InvcDtls || []).map(detail => ({
         goodsTaxRate: String((detail.TaxPercent ? parseFloat(String(detail.TaxPercent)) / 100 : 0.13).toFixed(2)),
