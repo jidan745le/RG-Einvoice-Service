@@ -20,6 +20,12 @@ import { lastValueFrom } from 'rxjs';
 export class InvoiceService {
   private readonly logger = new Logger(InvoiceService.name);
 
+  // Cache to store authorization by orderNo for callback processing
+  private readonly authorizationCache = new Map<string, { authorization: string; tenantId: string; timestamp: number }>();
+
+  // Cache cleanup interval (24 hours)
+  private readonly CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+
   constructor(
     @InjectRepository(Invoice)
     private readonly invoiceRepository: Repository<Invoice>,
@@ -30,7 +36,61 @@ export class InvoiceService {
     private readonly tenantConfigService: TenantConfigService,
     private readonly configService: ConfigService,
     private readonly httpService: HttpService,
-  ) { }
+  ) {
+    // Clean up expired cache entries every hour
+    setInterval(() => {
+      this.cleanupExpiredCache();
+    }, 60 * 60 * 1000); // 1 hour
+  }
+
+  /**
+   * Clean up expired cache entries
+   */
+  private cleanupExpiredCache(): void {
+    const now = Date.now();
+    for (const [orderNo, entry] of this.authorizationCache.entries()) {
+      if (now - entry.timestamp > this.CACHE_TTL) {
+        this.authorizationCache.delete(orderNo);
+        this.logger.log(`Cleaned up expired cache entry for orderNo: ${orderNo}`);
+      }
+    }
+  }
+
+  /**
+   * Store authorization for callback processing
+   */
+  private storeAuthorizationForCallback(orderNo: string, authorization: string, tenantId: string): void {
+    this.authorizationCache.set(orderNo, {
+      authorization,
+      tenantId,
+      timestamp: Date.now()
+    });
+    this.logger.log(`Stored authorization for orderNo: ${orderNo}, tenantId: ${tenantId}`);
+  }
+
+  /**
+   * Retrieve authorization for callback processing
+   */
+  private getAuthorizationForCallback(orderNo: string): { authorization: string; tenantId: string } | null {
+    const entry = this.authorizationCache.get(orderNo);
+    if (!entry) {
+      this.logger.warn(`No authorization found in cache for orderNo: ${orderNo}`);
+      return null;
+    }
+
+    // Check if entry is expired
+    if (Date.now() - entry.timestamp > this.CACHE_TTL) {
+      this.authorizationCache.delete(orderNo);
+      this.logger.warn(`Authorization cache entry expired for orderNo: ${orderNo}`);
+      return null;
+    }
+
+    this.logger.log(`Retrieved authorization for orderNo: ${orderNo}, tenantId: ${entry.tenantId}`);
+    return {
+      authorization: entry.authorization,
+      tenantId: entry.tenantId
+    };
+  }
 
   /**
    * Create a new invoice
@@ -453,7 +513,15 @@ export class InvoiceService {
       const companyInfo = await this.tenantConfigService.getCompanyInfo(tenantId, authorization);
 
       // Generate order number using UUID (shortened) and include erpInvoiceId for easier retrieval in callback
-      const orderNo = `ORD-${uuidv4().substring(0, 8)}-${id}`;
+      // Also include tenantId for callback processing
+      const orderNo = `ORD-${uuidv4().substring(0, 8)}-${tenantId}-${id}`;
+
+      // Store authorization for callback processing
+      if (authorization) {
+        this.storeAuthorizationForCallback(orderNo, authorization, tenantId);
+      } else {
+        this.logger.warn(`No authorization provided for invoice ${id}, callback processing may fail`);
+      }
 
       // Map invoice details to Baiwang format from Epicor data
       const invoiceDetailList = (epicorInvoiceData.InvcDtls || []).map(detail => ({
@@ -544,77 +612,106 @@ export class InvoiceService {
     try {
       // Parse callback data
       const callbackJson = typeof callbackData === 'string' ? JSON.parse(callbackData) : callbackData;
-      this.logger.log(`Parsed callback JSON: ${JSON.stringify(callbackJson)}`);
-
       const data = typeof callbackJson.data === 'string' ? JSON.parse(callbackJson.data) : callbackJson.data;
-      this.logger.log(`Extracted callback data: ${JSON.stringify(data)}`);
 
       // 检查是否是合并发票的回调
       const orderNo = data.orderNo;
       if (orderNo && orderNo.startsWith('MERGE-')) {
-        this.logger.log(`Detected merged invoice callback for orderNo: ${orderNo}`);
         return this.processMergedInvoiceCallback(callbackData);
       }
 
       // Check if it's a successful invoice
       if (data.status === '01') { // 01 represents success
-        this.logger.log(`Processing successful invoice callback with status: ${data.status}`);
-
         // Find the invoice using orderNo which contains the ERP invoice ID
         const orderNo = data.orderNo;
-        this.logger.log(`Callback orderNo: ${orderNo}`);
 
         // Extract the erpInvoiceId if it's included in the orderNo
         let erpInvoiceId: number | undefined = undefined;
         if (orderNo) {
           try {
-            // Try to extract the erpInvoiceId from the orderNo if it was formatted that way during submission
-            const match = orderNo.match(/ORD-[a-f0-9]+-(\d+)/);
+            // Try to extract the erpInvoiceId from the orderNo with new format: ORD-{uuid}-{tenantId}-{invoiceId}
+            const match = orderNo.match(/ORD-[a-f0-9]+-[^-]+-(\d+)/);
             if (match && match[1]) {
               erpInvoiceId = parseInt(match[1], 10);
-              this.logger.log(`Successfully extracted erpInvoiceId: ${erpInvoiceId} from orderNo: ${orderNo}`);
-            } else {
-              this.logger.warn(`No match found for erpInvoiceId pattern in orderNo: ${orderNo}`);
             }
           } catch (error) {
-            this.logger.error(`Error extracting erpInvoiceId from orderNo: ${orderNo}`, error.stack);
+            this.logger.warn(`Could not extract erpInvoiceId from : ${orderNo}`);
           }
-        } else {
-          this.logger.error('OrderNo is missing from callback data');
         }
 
         if (!erpInvoiceId) {
-          const errorMsg = `Could not extract erpInvoiceId from orderNo: ${orderNo}`;
-          this.logger.error(errorMsg);
-          throw new Error(errorMsg);
+          throw new Error(`Could not extract erpInvoiceId from orderNo: ${orderNo}`);
         }
 
-        // Get Epicor configuration from default tenant (we'll need to enhance this to get the correct tenant)
-        // For now, we'll use a default configuration approach
-        const tenantId = 'default'; // This should be enhanced to get the correct tenant
-        this.logger.log(`Getting Epicor configuration for tenant: ${tenantId}`);
+        // Get Epicor configuration using cached authorization from submit time
+        // Extract orderNo to get cached authorization and tenant info
+        const cachedAuth = this.getAuthorizationForCallback(orderNo);
+
+        if (!cachedAuth) {
+          this.logger.error(`No cached authorization found for orderNo: ${orderNo}`);
+
+          return {
+            success: true,
+            message: 'Invoice callback processed but Epicor update skipped due to missing authorization',
+            data: {
+              erpInvoiceId,
+              status: 'SUBMITTED',
+              eInvoiceId: data.serialNo,
+              orderNo,
+              warning: 'Epicor update skipped - no cached authorization found'
+            }
+          };
+        }
+
+        const { authorization: cachedAuthorization, tenantId } = cachedAuth;
+        this.logger.log(`Using cached authorization for tenant: ${tenantId}`);
+
+        let appConfig;
+        let serverSettings: EpicorTenantConfig | undefined;
 
         try {
-          const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice');
-          this.logger.log(`Retrieved app config: ${appConfig ? 'success' : 'null'}`);
+          // Use the cached authorization from submit time
+          appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice', cachedAuthorization);
+          serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
+        } catch (configError) {
+          this.logger.error(`Failed to get app config with cached authorization: ${configError.message}`);
 
-          const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
+          return {
+            success: true,
+            message: 'Invoice callback processed but Epicor update skipped due to configuration error',
+            data: {
+              erpInvoiceId,
+              status: 'SUBMITTED',
+              eInvoiceId: data.serialNo,
+              orderNo,
+              warning: `Epicor update skipped - configuration error: ${configError.message}`
+            }
+          };
+        }
 
-          if (!serverSettings) {
-            const errorMsg = 'Epicor server configuration not found';
-            this.logger.error(errorMsg);
-            throw new Error(errorMsg);
-          }
+        if (!serverSettings) {
+          this.logger.error('Epicor server configuration not found in app config');
 
-          this.logger.log(`Epicor server settings - baseAPI: ${serverSettings.serverBaseAPI}, companyID: ${serverSettings.companyID}, userAccount: ${serverSettings.userAccount}`);
+          return {
+            success: true,
+            message: 'Invoice callback processed but Epicor update skipped due to missing server settings',
+            data: {
+              erpInvoiceId,
+              status: 'SUBMITTED',
+              eInvoiceId: data.serialNo,
+              orderNo,
+              warning: 'Epicor update skipped - server settings not found'
+            }
+          };
+        }
 
-          if (serverSettings.password === undefined) {
-            serverSettings.password = '';
-            this.logger.log('Password was undefined, set to empty string');
-          }
+        if (serverSettings.password === undefined) {
+          serverSettings.password = '';
+        }
 
-          // Prepare update data
-          const updateData = {
+        try {
+          // Update invoice with e-invoice information in Epicor
+          await this.epicorService.updateInvoiceStatus(serverSettings, erpInvoiceId, {
             ELIEInvoice: true,
             ELIEInvStatus: 1, // 1 = SUBMITTED/SUCCESS
             ELIEInvUpdatedBy: data.drawer || 'system',
@@ -623,18 +720,24 @@ export class InvoiceService {
             EInvRefNum: orderNo,
             ELIEInvID: data.serialNo, // Use serialNo as E-Invoice ID
             RowMod: 'U'
+          });
+
+          this.logger.log(`Successfully updated invoice ${erpInvoiceId} status in Epicor via callback`);
+        } catch (updateError) {
+          this.logger.error(`Failed to update invoice ${erpInvoiceId} in Epicor: ${updateError.message}`, updateError.stack);
+
+          // Still return success for the callback processing, but note the Epicor update failure
+          return {
+            success: true,
+            message: 'Invoice callback processed but Epicor update failed',
+            data: {
+              erpInvoiceId,
+              status: 'SUBMITTED',
+              eInvoiceId: data.serialNo,
+              orderNo,
+              warning: `Epicor update failed: ${updateError.message}`
+            }
           };
-
-          this.logger.log(`Updating invoice ${erpInvoiceId} in Epicor with data:`, JSON.stringify(updateData));
-
-          // Update invoice with e-invoice information in Epicor
-          await this.epicorService.updateInvoiceStatus(serverSettings, erpInvoiceId, updateData);
-
-          this.logger.log(`Successfully updated invoice ${erpInvoiceId} status in Epicor`);
-
-        } catch (configError) {
-          this.logger.error(`Error getting Epicor configuration or updating invoice status: ${configError.message}`, configError.stack);
-          throw configError;
         }
 
         return {
@@ -650,64 +753,59 @@ export class InvoiceService {
       } else {
         // Handle error or other status
         this.logger.warn(`Received non-success status: ${data.status} - ${data.statusMessage}`);
-        this.logger.log(`Full error callback data: ${JSON.stringify(data)}`);
 
         // Try to extract erpInvoiceId from orderNo
         let erpInvoiceId: number | undefined = undefined;
         if (data.orderNo) {
-          this.logger.log(`Attempting to extract erpInvoiceId from error callback orderNo: ${data.orderNo}`);
           try {
-            const match = data.orderNo.match(/ORD-[a-f0-9]+-(\d+)/);
+            const match = data.orderNo.match(/ORD-[a-f0-9]+-[^-]+-(\d+)/);
             if (match && match[1]) {
               erpInvoiceId = parseInt(match[1], 10);
-              this.logger.log(`Successfully extracted erpInvoiceId: ${erpInvoiceId} from error callback`);
-            } else {
-              this.logger.warn(`No match found for erpInvoiceId pattern in error callback orderNo: ${data.orderNo}`);
             }
           } catch (error) {
-            this.logger.error(`Error extracting erpInvoiceId from error callback orderNo: ${data.orderNo}`, error.stack);
+            this.logger.warn(`Could not extract erpInvoiceId from orderNo: ${data.orderNo}`);
           }
-        } else {
-          this.logger.error('OrderNo is missing from error callback data');
         }
 
         if (erpInvoiceId) {
-          this.logger.log(`Updating invoice ${erpInvoiceId} with error status in Epicor`);
+          // Get Epicor configuration using cached authorization
+          const cachedAuth = this.getAuthorizationForCallback(data.orderNo);
 
-          // Get Epicor configuration
-          const tenantId = 'default'; // This should be enhanced to get the correct tenant
+          if (!cachedAuth) {
+            this.logger.warn(`No cached authorization found for error callback orderNo: ${data.orderNo}`);
+
+            return {
+              success: false,
+              message: 'Invoice status update failed',
+              error: data.statusMessage || data.errorMessage || 'Unknown error'
+            };
+          }
+
+          const { authorization: cachedAuthorization, tenantId } = cachedAuth;
 
           try {
-            const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice');
+            const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice', cachedAuthorization);
             const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
 
             if (serverSettings) {
-              this.logger.log(`Retrieved Epicor config for error update - baseAPI: ${serverSettings.serverBaseAPI}`);
-
               if (serverSettings.password === undefined) {
                 serverSettings.password = '';
               }
 
-              const errorUpdateData = {
+              await this.epicorService.updateInvoiceStatus(serverSettings, erpInvoiceId, {
                 ELIEInvoice: true,
                 ELIEInvStatus: 2, // 2 = ERROR
                 ELIEInvUpdatedBy: 'system',
-                ELIEInvException: `E-Invoice error: ${data.statusMessage || data.errorMessage || 'Unknown error'}`,
+                ELIEInvException: `E-Invoice error: ${data.statusMessage}`,
                 ELIEInvUpdatedOn: new Date().toISOString(),
                 EInvRefNum: data.orderNo,
                 RowMod: 'U'
-              };
+              });
 
-              this.logger.log(`Updating invoice ${erpInvoiceId} with error data:`, JSON.stringify(errorUpdateData));
-
-              await this.epicorService.updateInvoiceStatus(serverSettings, erpInvoiceId, errorUpdateData);
-
-              this.logger.log(`Successfully updated invoice ${erpInvoiceId} with error status in Epicor`);
-            } else {
-              this.logger.error('No Epicor server settings found for error callback processing');
+              this.logger.log(`Successfully updated invoice ${erpInvoiceId} with error status in Epicor via callback`);
             }
-          } catch (updateError) {
-            this.logger.error(`Failed to update invoice ${erpInvoiceId} with error status in Epicor: ${updateError.message}`, updateError.stack);
+          } catch (configOrUpdateError) {
+            this.logger.warn(`Failed to update invoice ${erpInvoiceId} with error status in Epicor: ${configOrUpdateError.message}`);
           }
         } else {
           this.logger.warn('Could not extract erpInvoiceId from error callback, skipping Epicor update');
@@ -715,18 +813,241 @@ export class InvoiceService {
 
         return {
           success: false,
-          message: 'Invoice status update failed',
-          error: data.statusMessage || data.errorMessage || 'Unknown error'
+          message: 'Error processing callback',
+          error: data.statusMessage
         };
       }
     } catch (error) {
       this.logger.error(`Error processing callback: ${error.message}`, error.stack);
-      this.logger.error(`Original callback data that caused error: ${JSON.stringify(callbackData)}`);
       return {
         success: false,
         message: 'Error processing callback',
         error: error.message
       };
+    }
+  }
+
+  /**
+   * 处理合并发票的回调数据
+   * @param callbackData 百望回调数据
+   * @returns 处理结果
+   */
+  async processMergedInvoiceCallback(callbackData: any): Promise<any> {
+    this.logger.log(`Processing merged invoice callback: ${JSON.stringify(callbackData)}`);
+
+    try {
+      // 解析回调数据
+      const callbackJson = typeof callbackData === 'string' ? JSON.parse(callbackData) : callbackData;
+      const data = typeof callbackJson.data === 'string' ? JSON.parse(callbackJson.data) : callbackJson.data;
+
+      // 检查是否成功开具发票
+      if (data.status === '01') { // 01表示成功
+        // 使用orderNo查找发票
+        const orderNo = data.orderNo;
+
+        // 从orderNo中提取所有的erpInvoiceId with new format: MERGE-{uuid}-{tenantId}-{invoiceIds}
+        let erpInvoiceIds: number[] = [];
+        try {
+          const match = orderNo.match(/MERGE-[a-f0-9]+-[^-]+-(.+)/);
+          if (match && match[1]) {
+            erpInvoiceIds = match[1].split('-').map(id => parseInt(id, 10));
+          }
+        } catch (error) {
+          this.logger.warn(`Could not extract erpInvoiceIds from : ${orderNo}`);
+          throw new Error(`Could not parse order number: ${orderNo}`);
+        }
+
+        if (!erpInvoiceIds.length) {
+          throw new Error(`No invoice IDs found in order number: ${orderNo}`);
+        }
+
+        // Get Epicor configuration using cached authorization from submit time
+        // Extract orderNo to get cached authorization and tenant info
+        const cachedAuth = this.getAuthorizationForCallback(orderNo);
+
+        if (!cachedAuth) {
+          this.logger.error(`No cached authorization found for orderNo: ${orderNo}`);
+
+          return {
+            success: true,
+            message: 'Invoice callback processed but Epicor update skipped due to missing authorization',
+            data: {
+              erpInvoiceIds,
+              status: 'SUBMITTED',
+              eInvoiceId: data.serialNo,
+              orderNo,
+              warning: 'Epicor update skipped - no cached authorization found'
+            }
+          };
+        }
+
+        const { authorization: cachedAuthorization, tenantId } = cachedAuth;
+        this.logger.log(`Using cached authorization for tenant: ${tenantId}`);
+
+        let appConfig;
+        let serverSettings: EpicorTenantConfig | undefined;
+
+        try {
+          // Use the cached authorization from submit time
+          appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice', cachedAuthorization);
+          serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
+        } catch (configError) {
+          this.logger.error(`Failed to get app config with cached authorization: ${configError.message}`);
+
+          return {
+            success: true,
+            message: 'Invoice callback processed but Epicor update skipped due to configuration error',
+            data: {
+              erpInvoiceIds,
+              status: 'SUBMITTED',
+              eInvoiceId: data.serialNo,
+              orderNo,
+              warning: `Epicor update skipped - configuration error: ${configError.message}`
+            }
+          };
+        }
+
+        if (!serverSettings) {
+          this.logger.error('Epicor server configuration not found in app config');
+
+          return {
+            success: true,
+            message: 'Invoice callback processed but Epicor update skipped due to missing server settings',
+            data: {
+              erpInvoiceIds,
+              status: 'SUBMITTED',
+              eInvoiceId: data.serialNo,
+              orderNo,
+              warning: 'Epicor update skipped - server settings not found'
+            }
+          };
+        }
+
+        if (serverSettings.password === undefined) {
+          serverSettings.password = '';
+        }
+
+        try {
+          // 更新所有发票的电子发票信息在Epicor中
+          for (const id of erpInvoiceIds) {
+            try {
+              await this.epicorService.updateInvoiceStatus(serverSettings, id, {
+                ELIEInvoice: true,
+                ELIEInvStatus: 1, // 1 = SUBMITTED/SUCCESS
+                ELIEInvUpdatedBy: data.drawer || 'system',
+                ELIEInvException: `E-Invoice issued successfully for merged invoices: ${erpInvoiceIds.join(', ')}`,
+                ELIEInvUpdatedOn: new Date().toISOString(),
+                EInvRefNum: orderNo,
+                ELIEInvID: data.serialNo, // Use serialNo as E-Invoice ID
+                RowMod: 'U'
+              });
+
+              this.logger.log(`Successfully updated invoice ${id} status in Epicor via callback`);
+            } catch (error) {
+              this.logger.error(`Could not update invoice with ID ${id} in Epicor: ${error.message}`);
+            }
+          }
+        } catch (updateError) {
+          this.logger.error(`Failed to update invoices in Epicor: ${updateError.message}`, updateError.stack);
+
+          // Still return success for the callback processing, but note the Epicor update failure
+          return {
+            success: true,
+            message: 'Invoice callback processed but Epicor update failed',
+            data: {
+              erpInvoiceIds,
+              status: 'SUBMITTED',
+              eInvoiceId: data.serialNo,
+              orderNo,
+              warning: `Epicor update failed: ${updateError.message}`
+            }
+          };
+        }
+
+        return {
+          success: true,
+          message: 'Merged invoices updated successfully',
+          data: {
+            erpInvoiceIds,
+            status: 'SUBMITTED',
+            eInvoiceId: data.serialNo,
+            orderNo
+          }
+        };
+      } else {
+        // 处理失败情况
+        this.logger.error(`Error processing callback: ${data.statusMessage}`);
+
+        // 尝试从orderNo中提取所有的erpInvoiceId
+        const orderNo = data.orderNo;
+        if (orderNo && orderNo.startsWith('MERGE-')) {
+          let erpInvoiceIds: number[] = [];
+          try {
+            const match = orderNo.match(/MERGE-[a-f0-9]+-[^-]+-(.+)/);
+            if (match && match[1]) {
+              erpInvoiceIds = match[1].split('-').map(id => parseInt(id, 10));
+            }
+          } catch (error) {
+            this.logger.warn(`Could not extract erpInvoiceIds from : ${orderNo}`);
+          }
+
+          // 更新所有相关发票的状态在Epicor中
+          if (erpInvoiceIds.length) {
+            // Get Epicor configuration using cached authorization
+            const cachedAuth = this.getAuthorizationForCallback(orderNo);
+
+            if (!cachedAuth) {
+              this.logger.warn(`No cached authorization found for error callback orderNo: ${orderNo}`);
+
+              return {
+                success: false,
+                message: 'Invoice status update failed',
+                error: data.statusMessage || data.errorMessage || 'Unknown error'
+              };
+            }
+
+            const { authorization: cachedAuthorization, tenantId } = cachedAuth;
+
+            try {
+              const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice', cachedAuthorization);
+              const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
+
+              if (serverSettings) {
+                if (serverSettings.password === undefined) {
+                  serverSettings.password = '';
+                }
+
+                for (const id of erpInvoiceIds) {
+                  try {
+                    await this.epicorService.updateInvoiceStatus(serverSettings, id, {
+                      ELIEInvoice: true,
+                      ELIEInvStatus: 2, // 2 = ERROR
+                      ELIEInvUpdatedBy: 'system',
+                      ELIEInvException: `Error in merged invoice: ${data.statusMessage}`,
+                      ELIEInvUpdatedOn: new Date().toISOString(),
+                      EInvRefNum: orderNo,
+                      RowMod: 'U'
+                    });
+                  } catch (error) {
+                    this.logger.error(`Could not update invoice with ID ${id} in Epicor: ${error.message}`);
+                  }
+                }
+              }
+            } catch (configOrUpdateError) {
+              this.logger.warn(`Failed to update invoice ${erpInvoiceIds[0]} with error status in Epicor: ${configOrUpdateError.message}`);
+            }
+          }
+        }
+
+        return {
+          success: false,
+          message: 'Error processing merged invoice callback',
+          error: data.statusMessage
+        };
+      }
+    } catch (error) {
+      this.logger.error(`Error processing merged invoice callback: ${error.message}`, error.stack);
+      throw error;
     }
   }
 
@@ -1085,7 +1406,15 @@ export class InvoiceService {
       const totalAmount = mergedItems.reduce((sum, item) => sum + Number(item.goodsTotalPrice), 0);
 
       // 生成订单号，包含所有发票ID以便回调时识别
-      const orderNo = `MERGE-${uuidv4().substring(0, 8)}-${erpInvoiceIds.join('-')}`;
+      // Also include tenantId for callback processing
+      const orderNo = `MERGE-${uuidv4().substring(0, 8)}-${tenantId}-${erpInvoiceIds.join('-')}`;
+
+      // Store authorization for callback processing
+      if (authorization) {
+        this.storeAuthorizationForCallback(orderNo, authorization, tenantId);
+      } else {
+        this.logger.warn(`No authorization provided for merged invoices ${erpInvoiceIds.join(', ')}, callback processing may fail`);
+      }
 
       // 创建百望请求
       const baiwangRequest = {
@@ -1138,147 +1467,6 @@ export class InvoiceService {
       };
     } catch (error) {
       this.logger.error(`Error merging invoices: ${error.message}`, error.stack);
-      throw error;
-    }
-  }
-
-  /**
-   * 处理合并发票的回调数据
-   * @param callbackData 百望回调数据
-   * @returns 处理结果
-   */
-  async processMergedInvoiceCallback(callbackData: any): Promise<any> {
-    this.logger.log(`Processing merged invoice callback: ${JSON.stringify(callbackData)}`);
-
-    try {
-      // 解析回调数据
-      const callbackJson = typeof callbackData === 'string' ? JSON.parse(callbackData) : callbackData;
-      const data = typeof callbackJson.data === 'string' ? JSON.parse(callbackJson.data) : callbackJson.data;
-
-      // 检查是否成功开具发票
-      if (data.status === '01') { // 01表示成功
-        // 使用orderNo查找发票
-        const orderNo = data.orderNo;
-
-        // 从orderNo中提取所有的erpInvoiceId
-        if (!orderNo || !orderNo.startsWith('MERGE-')) {
-          // 如果不是合并发票的回调，交由普通回调处理
-          return this.processCallback(callbackData);
-        }
-
-        let erpInvoiceIds: number[] = [];
-        try {
-          // 从orderNo中提取所有的erpInvoiceId
-          const match = orderNo.match(/MERGE-[a-f0-9]+-(.+)/);
-          if (match && match[1]) {
-            erpInvoiceIds = match[1].split('-').map(id => parseInt(id, 10));
-          }
-        } catch (error) {
-          this.logger.warn(`Could not extract erpInvoiceIds from : ${orderNo}`);
-          throw new Error(`Could not parse order number: ${orderNo}`);
-        }
-
-        if (!erpInvoiceIds.length) {
-          throw new Error(`No invoice IDs found in order number: ${orderNo}`);
-        }
-
-        // Get Epicor configuration
-        const tenantId = 'default'; // This should be enhanced to get the correct tenant
-        const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice');
-        const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
-
-        if (!serverSettings) {
-          throw new Error('Epicor server configuration not found');
-        }
-
-        if (serverSettings.password === undefined) {
-          serverSettings.password = '';
-        }
-
-        // 更新所有发票的电子发票信息在Epicor中
-        for (const id of erpInvoiceIds) {
-          try {
-            await this.epicorService.updateInvoiceStatus(serverSettings, id, {
-              ELIEInvoice: true,
-              ELIEInvStatus: 1, // 1 = SUBMITTED/SUCCESS
-              ELIEInvUpdatedBy: data.drawer || 'system',
-              ELIEInvException: `E-Invoice issued successfully for merged invoices: ${erpInvoiceIds.join(', ')}`,
-              ELIEInvUpdatedOn: new Date().toISOString(),
-              EInvRefNum: orderNo,
-              ELIEInvID: data.serialNo, // Use serialNo as E-Invoice ID
-              RowMod: 'U'
-            });
-          } catch (error) {
-            this.logger.error(`Could not update invoice with ID ${id} in Epicor: ${error.message}`);
-          }
-        }
-
-        return {
-          success: true,
-          message: 'Merged invoices updated successfully',
-          data: {
-            erpInvoiceIds,
-            status: 'SUBMITTED',
-            eInvoiceId: data.serialNo,
-            orderNo
-          }
-        };
-      } else {
-        // 处理失败情况
-        this.logger.error(`Error processing callback: ${data.statusMessage}`);
-
-        // 尝试从orderNo中提取所有的erpInvoiceId
-        const orderNo = data.orderNo;
-        if (orderNo && orderNo.startsWith('MERGE-')) {
-          let erpInvoiceIds: number[] = [];
-          try {
-            const match = orderNo.match(/MERGE-[a-f0-9]+-(.+)/);
-            if (match && match[1]) {
-              erpInvoiceIds = match[1].split('-').map(id => parseInt(id, 10));
-            }
-          } catch (error) {
-            this.logger.warn(`Could not extract erpInvoiceIds from : ${orderNo}`);
-          }
-
-          // 更新所有相关发票的状态在Epicor中
-          if (erpInvoiceIds.length) {
-            // Get Epicor configuration
-            const tenantId = 'default'; // This should be enhanced to get the correct tenant
-            const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice');
-            const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
-
-            if (serverSettings) {
-              if (serverSettings.password === undefined) {
-                serverSettings.password = '';
-              }
-
-              for (const id of erpInvoiceIds) {
-                try {
-                  await this.epicorService.updateInvoiceStatus(serverSettings, id, {
-                    ELIEInvoice: true,
-                    ELIEInvStatus: 2, // 2 = ERROR
-                    ELIEInvUpdatedBy: 'system',
-                    ELIEInvException: `Error in merged invoice: ${data.statusMessage}`,
-                    ELIEInvUpdatedOn: new Date().toISOString(),
-                    EInvRefNum: orderNo,
-                    RowMod: 'U'
-                  });
-                } catch (error) {
-                  this.logger.error(`Could not update invoice with ID ${id} in Epicor: ${error.message}`);
-                }
-              }
-            }
-          }
-        }
-
-        return {
-          success: false,
-          message: 'Error processing merged invoice callback',
-          error: data.statusMessage
-        };
-      }
-    } catch (error) {
-      this.logger.error(`Error processing merged invoice callback: ${error.message}`, error.stack);
       throw error;
     }
   }
@@ -1584,5 +1772,113 @@ export class InvoiceService {
       this.logger.error(`Failed to update config: ${error.message}`, error.stack);
       throw error;
     }
+  }
+
+  /**
+   * Get authorization cache statistics
+   */
+  getAuthorizationCacheStats(): { totalEntries: number; oldestEntry: Date | null; newestEntry: Date | null } {
+    const entries = Array.from(this.authorizationCache.values());
+
+    if (entries.length === 0) {
+      return {
+        totalEntries: 0,
+        oldestEntry: null,
+        newestEntry: null
+      };
+    }
+
+    const timestamps = entries.map(entry => entry.timestamp);
+    const oldestTimestamp = Math.min(...timestamps);
+    const newestTimestamp = Math.max(...timestamps);
+
+    return {
+      totalEntries: entries.length,
+      oldestEntry: new Date(oldestTimestamp),
+      newestEntry: new Date(newestTimestamp)
+    };
+  }
+
+  /**
+   * Manually clear authorization cache
+   */
+  clearAuthorizationCache(): { clearedEntries: number } {
+    const entriesCount = this.authorizationCache.size;
+    this.authorizationCache.clear();
+    this.logger.log(`Manually cleared ${entriesCount} authorization cache entries`);
+
+    return { clearedEntries: entriesCount };
+  }
+
+  /**
+   * Test method to verify authorization cache functionality
+   * This method is for development/testing purposes only
+   */
+  testAuthorizationCache(): {
+    testResults: Array<{ step: string; success: boolean; message: string }>;
+    cacheStats: { totalEntries: number; oldestEntry: Date | null; newestEntry: Date | null };
+  } {
+    const results: Array<{ step: string; success: boolean; message: string }> = [];
+
+    try {
+      // Test 1: Store authorization
+      const testOrderNo = `TEST-${uuidv4().substring(0, 8)}-tenant1-12345`;
+      const testAuth = 'Bearer test-token-12345';
+      const testTenantId = 'tenant1';
+
+      this.storeAuthorizationForCallback(testOrderNo, testAuth, testTenantId);
+      results.push({
+        step: 'Store Authorization',
+        success: true,
+        message: `Stored authorization for orderNo: ${testOrderNo}`
+      });
+
+      // Test 2: Retrieve authorization
+      const retrieved = this.getAuthorizationForCallback(testOrderNo);
+      if (retrieved && retrieved.authorization === testAuth && retrieved.tenantId === testTenantId) {
+        results.push({
+          step: 'Retrieve Authorization',
+          success: true,
+          message: `Successfully retrieved authorization for orderNo: ${testOrderNo}`
+        });
+      } else {
+        results.push({
+          step: 'Retrieve Authorization',
+          success: false,
+          message: `Failed to retrieve correct authorization for orderNo: ${testOrderNo}`
+        });
+      }
+
+      // Test 3: Try to retrieve non-existent authorization
+      const nonExistent = this.getAuthorizationForCallback('NON-EXISTENT-ORDER');
+      if (!nonExistent) {
+        results.push({
+          step: 'Retrieve Non-existent',
+          success: true,
+          message: 'Correctly returned null for non-existent orderNo'
+        });
+      } else {
+        results.push({
+          step: 'Retrieve Non-existent',
+          success: false,
+          message: 'Unexpectedly returned data for non-existent orderNo'
+        });
+      }
+
+      // Clean up test data
+      this.authorizationCache.delete(testOrderNo);
+
+    } catch (error) {
+      results.push({
+        step: 'Test Execution',
+        success: false,
+        message: `Test failed with error: ${error.message}`
+      });
+    }
+
+    return {
+      testResults: results,
+      cacheStats: this.getAuthorizationCacheStats()
+    };
   }
 }
