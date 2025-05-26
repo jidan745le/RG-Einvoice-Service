@@ -91,257 +91,257 @@ export class InvoiceService {
   }> {
     const { page = 1, limit = 10, ...filters } = queryDto;
 
-    if (filters.fromEpicor) {
-      if (!tenantId || !authorization) {
-        this.logger.error('Tenant ID and Authorization are required when fromEpicor is true.');
-        throw new Error('Tenant ID and Authorization are required for fetching from Epicor.');
-      }
-      try {
-        const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice', authorization);
-        const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
 
-        if (!serverSettings || !serverSettings.serverBaseAPI || !serverSettings.companyID || !serverSettings.userAccount) {
-          this.logger.error('Epicor server settings are missing or incomplete from tenant configuration.');
-          throw new Error('Epicor server configuration is incomplete.');
-        }
-
-        if (serverSettings.password === undefined) {
-          serverSettings.password = '';
-        }
-
-        const filterClauses: string[] = [];
-        if (filters.erpInvoiceId) {
-          try {
-            // Parse the input as a number for exact matching
-            const numValue = Number(filters.erpInvoiceId);
-            if (!isNaN(numValue)) {
-              // Use string concatenation with explicit string conversion
-              filterClauses.push('InvcHead_InvoiceNum eq ' + numValue.toString());
-            }
-          } catch (e) {
-            // If parsing fails, skip this filter
-            this.logger.warn(`Could not parse erpInvoiceId filter "${filters.erpInvoiceId}" as a number`);
-          }
-        }
-        if (filters.customerName) {
-          filterClauses.push(`substringof(Customer_Name, '${filters.customerName}')`);
-        }
-        if (filters.eInvoiceId) {
-          filterClauses.push(`InvcHead_ELIEInvID eq '${filters.eInvoiceId}'`);
-        }
-
-        const formatDate = (dateInput: string | Date): string | null => {
-          if (!dateInput) return null;
-          try {
-            const d = new Date(dateInput);
-            if (isNaN(d.getTime())) return null;
-            return d.toISOString().split('T')[0]; // 'YYYY-MM-DD'
-          } catch { return null; }
-        };
-
-        if (filters.startDate) {
-          const formattedDate = formatDate(filters.startDate);
-          if (formattedDate) {
-            filterClauses.push(`OrderHed_OrderDate ge datetime'${formattedDate}'`);
-          }
-        }
-        if (filters.endDate) {
-          const formattedDate = formatDate(filters.endDate);
-          if (formattedDate) {
-            filterClauses.push(`OrderHed_OrderDate le datetime'${formattedDate}'`);
-          }
-        }
-        if (filters.fapiaoType) {
-          // Assuming filters.fapiaoType is a number or a string that can be used directly.
-          // If InvcHead_CNTaxInvoiceType is numeric, and filters.fapiaoType is string, it might need conversion or 'eq' might handle it.
-          filterClauses.push(`InvcHead_CNTaxInvoiceType eq ${filters.fapiaoType}`);
-        }
-        if (filters.submittedBy) {
-          filterClauses.push(`InvcHead_ELIEInvUpdatedBy eq '${filters.submittedBy}'`);
-        }
-        // Note: filters.status is intentionally ignored for Epicor queries as per current plan.
-
-        if (filters.invoiceComment) {
-          filterClauses.push(`substringof(InvcHead_InvoiceComment, '${filters.invoiceComment}')`);
-        }
-        const odataFilterString = filterClauses.join(' and ');
-        this.logger.log(`Constructed OData Filter for Epicor: ${odataFilterString}`);
-
-        const epicorData = await this.epicorService.fetchAllInvoicesFromBaq(
-          serverSettings,
-          {
-            filter: odataFilterString,
-          }
-        );
-
-        const epicorInvoicesRaw = epicorData.value || [];
-
-        // Transform the new API response structure
-        const transformedInvoices: Invoice[] = [];
-        for (const epicorInvoice of epicorInvoicesRaw as unknown as EpicorInvoiceHeader[]) {
-          const invoice = new Invoice();
-          invoice.erpInvoiceId = epicorInvoice.InvoiceNum;
-          invoice.erpInvoiceDescription = epicorInvoice.Description || '';
-          invoice.fapiaoType = epicorInvoice.CNTaxInvoiceType?.toString() || '';
-          invoice.customerName = epicorInvoice.CustomerName || '';
-          invoice.customerResaleId = epicorInvoice.CustNum?.toString() || '';
-          invoice.invoiceComment = epicorInvoice.InvoiceComment || '';
-          invoice.orderNumber = epicorInvoice.OrderNum?.toString() || '';
-          invoice.orderDate = epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : null;
-          invoice.poNumber = epicorInvoice.PONum || '';
-          invoice.status = 'PENDING';
-          invoice.id = epicorInvoice.InvoiceNum;
-          invoice.createdAt = epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : new Date();
-          invoice.updatedAt = epicorInvoice.ELIEInvUpdatedOn ? new Date(epicorInvoice.ELIEInvUpdatedOn) : new Date();
-
-          // Map invoice details from InvcDtls array
-          invoice.invoiceDetails = (epicorInvoice.InvcDtls || []).map(detailRaw => {
-            const detail = new InvoiceDetail();
-            detail.erpInvoiceId = detailRaw.InvoiceNum;
-            detail.lineDescription = detailRaw.LineDesc || '';
-            detail.commodityCode = detailRaw.CommodityCode || '';
-            detail.uomDescription = detailRaw.IUM || '';
-            detail.salesUm = detailRaw.SalesUM || '';
-            detail.sellingShipQty = parseFloat(detailRaw.SellingShipQty || "0") || 0;
-            detail.docUnitPrice = parseFloat(detailRaw.DocUnitPrice || "0") || 0;
-            detail.docExtPrice = parseFloat(detailRaw.DocExtPrice || "0") || 0;
-            detail.taxPercent = parseFloat(detailRaw.TaxPercent || "0") || 0;
-            detail.id = parseInt(`${epicorInvoice.InvoiceNum}${detailRaw.InvoiceLine || Math.random().toString(36).substring(2, 8)}`, 36);
-            detail.invoiceId = invoice.id;
-            return detail;
-          });
-          transformedInvoices.push(invoice);
-        }
-
-        // Sorting is now on the current page's data. For global sorting, OData $orderby should be used.
-        transformedInvoices.sort((a, b) => (b.orderDate?.getTime() || 0) - (a.orderDate?.getTime() || 0)); // Example sort by date
-
-        const totalItems = epicorData['@odata.count'] !== undefined ? epicorData['@odata.count'] : transformedInvoices.length;
-        // If @odata.count is undefined and transformedInvoices.length is used, it's only the current page count if top/skip was effective.
-
-        return {
-          items: transformedInvoices.slice((page - 1) * limit, page * limit), // This is now the paginated set from server
-          total: totalItems,
-          page,
-          limit,
-          totals: {
-            PENDING: transformedInvoices.filter(invoice => invoice.status === 'PENDING').length,
-            SUBMITTED: transformedInvoices.filter(invoice => invoice.status === 'SUBMITTED').length,
-            ERROR: transformedInvoices.filter(invoice => invoice.status === 'ERROR').length,
-            RED_NOTE: transformedInvoices.filter(invoice => invoice.status === 'RED_NOTE').length,
-            TOTAL: totalItems,
-          },
-        };
-
-      } catch (error) {
-        this.logger.error(`Error fetching or processing invoices from Epicor: ${error.message}`, error.stack);
-        // Return empty or error structure
-        return {
-          items: [],
-          total: 0,
-          page,
-          limit,
-          totals: { PENDING: 0, SUBMITTED: 0, ERROR: 0, RED_NOTE: 0, TOTAL: 0 },
-        };
-      }
+    if (!tenantId || !authorization) {
+      this.logger.error('Tenant ID and Authorization are required when fromEpicor is true.');
+      throw new Error('Tenant ID and Authorization are required for fetching from Epicor.');
     }
+    try {
+      const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice', authorization);
+      const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
+
+      if (!serverSettings || !serverSettings.serverBaseAPI || !serverSettings.companyID || !serverSettings.userAccount) {
+        this.logger.error('Epicor server settings are missing or incomplete from tenant configuration.');
+        throw new Error('Epicor server configuration is incomplete.');
+      }
+
+      if (serverSettings.password === undefined) {
+        serverSettings.password = '';
+      }
+
+      const filterClauses: string[] = [];
+      if (filters.erpInvoiceId) {
+        try {
+          // Parse the input as a number for exact matching
+          const numValue = Number(filters.erpInvoiceId);
+          if (!isNaN(numValue)) {
+            // Use string concatenation with explicit string conversion
+            filterClauses.push('InvcHead_InvoiceNum eq ' + numValue.toString());
+          }
+        } catch (e) {
+          // If parsing fails, skip this filter
+          this.logger.warn(`Could not parse erpInvoiceId filter "${filters.erpInvoiceId}" as a number`);
+        }
+      }
+      if (filters.customerName) {
+        filterClauses.push(`substringof(Customer_Name, '${filters.customerName}')`);
+      }
+      if (filters.eInvoiceId) {
+        filterClauses.push(`InvcHead_ELIEInvID eq '${filters.eInvoiceId}'`);
+      }
+
+      const formatDate = (dateInput: string | Date): string | null => {
+        if (!dateInput) return null;
+        try {
+          const d = new Date(dateInput);
+          if (isNaN(d.getTime())) return null;
+          return d.toISOString().split('T')[0]; // 'YYYY-MM-DD'
+        } catch { return null; }
+      };
+
+      if (filters.startDate) {
+        const formattedDate = formatDate(filters.startDate);
+        if (formattedDate) {
+          filterClauses.push(`OrderHed_OrderDate ge datetime'${formattedDate}'`);
+        }
+      }
+      if (filters.endDate) {
+        const formattedDate = formatDate(filters.endDate);
+        if (formattedDate) {
+          filterClauses.push(`OrderHed_OrderDate le datetime'${formattedDate}'`);
+        }
+      }
+      if (filters.fapiaoType) {
+        // Assuming filters.fapiaoType is a number or a string that can be used directly.
+        // If InvcHead_CNTaxInvoiceType is numeric, and filters.fapiaoType is string, it might need conversion or 'eq' might handle it.
+        filterClauses.push(`InvcHead_CNTaxInvoiceType eq ${filters.fapiaoType}`);
+      }
+      if (filters.submittedBy) {
+        filterClauses.push(`InvcHead_ELIEInvUpdatedBy eq '${filters.submittedBy}'`);
+      }
+      // Note: filters.status is intentionally ignored for Epicor queries as per current plan.
+
+      if (filters.invoiceComment) {
+        filterClauses.push(`substringof(InvcHead_InvoiceComment, '${filters.invoiceComment}')`);
+      }
+      const odataFilterString = filterClauses.join(' and ');
+      this.logger.log(`Constructed OData Filter for Epicor: ${odataFilterString}`);
+
+      const epicorData = await this.epicorService.fetchAllInvoicesFromBaq(
+        serverSettings,
+        {
+          filter: odataFilterString,
+        }
+      );
+
+      const epicorInvoicesRaw = epicorData.value || [];
+
+      // Transform the new API response structure
+      const transformedInvoices: Invoice[] = [];
+      for (const epicorInvoice of epicorInvoicesRaw as unknown as EpicorInvoiceHeader[]) {
+        const invoice = new Invoice();
+        invoice.erpInvoiceId = epicorInvoice.InvoiceNum;
+        invoice.erpInvoiceDescription = epicorInvoice.Description || '';
+        invoice.fapiaoType = epicorInvoice.CNTaxInvoiceType?.toString() || '';
+        invoice.customerName = epicorInvoice.CustomerName || '';
+        invoice.customerResaleId = epicorInvoice.CustNum?.toString() || '';
+        invoice.invoiceComment = epicorInvoice.InvoiceComment || '';
+        invoice.orderNumber = epicorInvoice.OrderNum?.toString() || '';
+        invoice.orderDate = epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : null;
+        invoice.poNumber = epicorInvoice.PONum || '';
+        invoice.status = 'PENDING';
+        invoice.id = epicorInvoice.InvoiceNum;
+        invoice.createdAt = epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : new Date();
+        invoice.updatedAt = epicorInvoice.ELIEInvUpdatedOn ? new Date(epicorInvoice.ELIEInvUpdatedOn) : new Date();
+
+        // Map invoice details from InvcDtls array
+        invoice.invoiceDetails = (epicorInvoice.InvcDtls || []).map(detailRaw => {
+          const detail = new InvoiceDetail();
+          detail.erpInvoiceId = detailRaw.InvoiceNum;
+          detail.lineDescription = detailRaw.LineDesc || '';
+          detail.commodityCode = detailRaw.CommodityCode || '';
+          detail.uomDescription = detailRaw.IUM || '';
+          detail.salesUm = detailRaw.SalesUM || '';
+          detail.sellingShipQty = parseFloat(detailRaw.SellingShipQty || "0") || 0;
+          detail.docUnitPrice = parseFloat(detailRaw.DocUnitPrice || "0") || 0;
+          detail.docExtPrice = parseFloat(detailRaw.DocExtPrice || "0") || 0;
+          detail.taxPercent = parseFloat(detailRaw.TaxPercent || "0") || 0;
+          detail.id = parseInt(`${epicorInvoice.InvoiceNum}${detailRaw.InvoiceLine || Math.random().toString(36).substring(2, 8)}`, 36);
+          detail.invoiceId = invoice.id;
+          return detail;
+        });
+        transformedInvoices.push(invoice);
+      }
+
+      // Sorting is now on the current page's data. For global sorting, OData $orderby should be used.
+      transformedInvoices.sort((a, b) => (b.orderDate?.getTime() || 0) - (a.orderDate?.getTime() || 0)); // Example sort by date
+
+      const totalItems = epicorData['@odata.count'] !== undefined ? epicorData['@odata.count'] : transformedInvoices.length;
+      // If @odata.count is undefined and transformedInvoices.length is used, it's only the current page count if top/skip was effective.
+
+      return {
+        items: transformedInvoices.slice((page - 1) * limit, page * limit), // This is now the paginated set from server
+        total: totalItems,
+        page,
+        limit,
+        totals: {
+          PENDING: transformedInvoices.filter(invoice => invoice.status === 'PENDING').length,
+          SUBMITTED: transformedInvoices.filter(invoice => invoice.status === 'SUBMITTED').length,
+          ERROR: transformedInvoices.filter(invoice => invoice.status === 'ERROR').length,
+          RED_NOTE: transformedInvoices.filter(invoice => invoice.status === 'RED_NOTE').length,
+          TOTAL: totalItems,
+        },
+      };
+
+    } catch (error) {
+      this.logger.error(`Error fetching or processing invoices from Epicor: ${error.message}`, error.stack);
+      // Return empty or error structure
+      return {
+        items: [],
+        total: 0,
+        page,
+        limit,
+        totals: { PENDING: 0, SUBMITTED: 0, ERROR: 0, RED_NOTE: 0, TOTAL: 0 },
+      };
+    }
+
 
     // Original logic for fetching from local DB
-    const queryBuilder = this.invoiceRepository.createQueryBuilder('invoice')
-      .leftJoinAndSelect('invoice.invoiceDetails', 'invoiceDetails');
+    // const queryBuilder = this.invoiceRepository.createQueryBuilder('invoice')
+    //   .leftJoinAndSelect('invoice.invoiceDetails', 'invoiceDetails');
 
-    // 构建状态统计查询
-    const statusQueryBuilder = this.invoiceRepository.createQueryBuilder('invoice')
-      .select('invoice.status', 'status')
-      .addSelect('COUNT(invoice.id)', 'count');
+    // // 构建状态统计查询
+    // const statusQueryBuilder = this.invoiceRepository.createQueryBuilder('invoice')
+    //   .select('invoice.status', 'status')
+    //   .addSelect('COUNT(invoice.id)', 'count');
 
-    // 对两个查询应用相同的过滤条件
-    if (filters.erpInvoiceId) {
-      const erpFilter = 'CAST(invoice.erpInvoiceId AS CHAR) LIKE :erpInvoiceId';
-      queryBuilder.andWhere(erpFilter, { erpInvoiceId: `%${filters.erpInvoiceId}%` });
-      statusQueryBuilder.andWhere(erpFilter, { erpInvoiceId: `%${filters.erpInvoiceId}%` });
-    }
+    // // 对两个查询应用相同的过滤条件
+    // if (filters.erpInvoiceId) {
+    //   const erpFilter = 'CAST(invoice.erpInvoiceId AS CHAR) LIKE :erpInvoiceId';
+    //   queryBuilder.andWhere(erpFilter, { erpInvoiceId: `%${filters.erpInvoiceId}%` });
+    //   statusQueryBuilder.andWhere(erpFilter, { erpInvoiceId: `%${filters.erpInvoiceId}%` });
+    // }
 
-    if (filters.customerName) {
-      const customerFilter = 'invoice.customerName LIKE :customerName';
-      queryBuilder.andWhere(customerFilter, { customerName: `%${filters.customerName}%` });
-      statusQueryBuilder.andWhere(customerFilter, { customerName: `%${filters.customerName}%` });
-    }
+    // if (filters.customerName) {
+    //   const customerFilter = 'invoice.customerName LIKE :customerName';
+    //   queryBuilder.andWhere(customerFilter, { customerName: `%${filters.customerName}%` });
+    //   statusQueryBuilder.andWhere(customerFilter, { customerName: `%${filters.customerName}%` });
+    // }
 
-    if (filters.status) {
-      const statusFilter = 'invoice.status = :status';
-      queryBuilder.andWhere(statusFilter, { status: filters.status });
-      // statusQueryBuilder.andWhere(statusFilter, { status: filters.status });
-    }
+    // if (filters.status) {
+    //   const statusFilter = 'invoice.status = :status';
+    //   queryBuilder.andWhere(statusFilter, { status: filters.status });
+    //   // statusQueryBuilder.andWhere(statusFilter, { status: filters.status });
+    // }
 
-    if (filters.eInvoiceId) {
-      const eInvoiceFilter = 'invoice.eInvoiceId = :eInvoiceId';
-      queryBuilder.andWhere(eInvoiceFilter, { eInvoiceId: filters.eInvoiceId });
-      statusQueryBuilder.andWhere(eInvoiceFilter, { eInvoiceId: filters.eInvoiceId });
-    }
+    // if (filters.eInvoiceId) {
+    //   const eInvoiceFilter = 'invoice.eInvoiceId = :eInvoiceId';
+    //   queryBuilder.andWhere(eInvoiceFilter, { eInvoiceId: filters.eInvoiceId });
+    //   statusQueryBuilder.andWhere(eInvoiceFilter, { eInvoiceId: filters.eInvoiceId });
+    // }
 
-    if (filters.startDate) {
-      const startDateFilter = 'invoice.orderDate >= :startDate';
-      queryBuilder.andWhere(startDateFilter, { startDate: filters.startDate });
-      statusQueryBuilder.andWhere(startDateFilter, { startDate: filters.startDate });
-    }
+    // if (filters.startDate) {
+    //   const startDateFilter = 'invoice.orderDate >= :startDate';
+    //   queryBuilder.andWhere(startDateFilter, { startDate: filters.startDate });
+    //   statusQueryBuilder.andWhere(startDateFilter, { startDate: filters.startDate });
+    // }
 
-    if (filters.endDate) {
-      const endDateFilter = 'invoice.orderDate <= :endDate';
-      queryBuilder.andWhere(endDateFilter, { endDate: filters.endDate });
-      statusQueryBuilder.andWhere(endDateFilter, { endDate: filters.endDate });
-    }
+    // if (filters.endDate) {
+    //   const endDateFilter = 'invoice.orderDate <= :endDate';
+    //   queryBuilder.andWhere(endDateFilter, { endDate: filters.endDate });
+    //   statusQueryBuilder.andWhere(endDateFilter, { endDate: filters.endDate });
+    // }
 
-    if (filters.fapiaoType) {
-      const fapiaoFilter = 'invoice.fapiaoType = :fapiaoType';
-      queryBuilder.andWhere(fapiaoFilter, { fapiaoType: filters.fapiaoType });
-      statusQueryBuilder.andWhere(fapiaoFilter, { fapiaoType: filters.fapiaoType });
-    }
+    // if (filters.fapiaoType) {
+    //   const fapiaoFilter = 'invoice.fapiaoType = :fapiaoType';
+    //   queryBuilder.andWhere(fapiaoFilter, { fapiaoType: filters.fapiaoType });
+    //   statusQueryBuilder.andWhere(fapiaoFilter, { fapiaoType: filters.fapiaoType });
+    // }
 
-    if (filters.submittedBy) {
-      const submitterFilter = 'invoice.submittedBy = :submittedBy';
-      queryBuilder.andWhere(submitterFilter, { submittedBy: filters.submittedBy });
-      statusQueryBuilder.andWhere(submitterFilter, { submittedBy: filters.submittedBy });
-    }
+    // if (filters.submittedBy) {
+    //   const submitterFilter = 'invoice.submittedBy = :submittedBy';
+    //   queryBuilder.andWhere(submitterFilter, { submittedBy: filters.submittedBy });
+    //   statusQueryBuilder.andWhere(submitterFilter, { submittedBy: filters.submittedBy });
+    // }
 
-    // 计算总记录数
-    const total = await queryBuilder.getCount();
+    // // 计算总记录数
+    // const total = await queryBuilder.getCount();
 
-    // 添加分页和排序
-    queryBuilder
-      .skip((page - 1) * limit)
-      .take(limit)
-      .orderBy('invoice.orderDate', 'DESC');
+    // // 添加分页和排序
+    // queryBuilder
+    //   .skip((page - 1) * limit)
+    //   .take(limit)
+    //   .orderBy('invoice.orderDate', 'DESC');
 
-    // 执行分页查询获取列表项
-    const items = await queryBuilder.getMany();
+    // // 执行分页查询获取列表项
+    // const items = await queryBuilder.getMany();
 
-    // 添加分组统计并执行查询
-    statusQueryBuilder.groupBy('invoice.status');
-    const statusCounts = await statusQueryBuilder.getRawMany();
+    // // 添加分组统计并执行查询
+    // statusQueryBuilder.groupBy('invoice.status');
+    // const statusCounts = await statusQueryBuilder.getRawMany();
 
-    // 创建状态计数对象并初始化所有状态为0
-    const totals = {
-      PENDING: 0,
-      SUBMITTED: 0,
-      ERROR: 0,
-      RED_NOTE: 0,
-      TOTAL: 0,
-    };
+    // // 创建状态计数对象并初始化所有状态为0
+    // const totals = {
+    //   PENDING: 0,
+    //   SUBMITTED: 0,
+    //   ERROR: 0,
+    //   RED_NOTE: 0,
+    //   TOTAL: 0,
+    // };
 
-    // 用查询结果填充状态计数
-    statusCounts.forEach(item => {
-      totals[item.status] = parseInt(item.count, 10);
-    });
-    totals.TOTAL = totals.PENDING + totals.SUBMITTED + totals.ERROR + totals.RED_NOTE;
+    // // 用查询结果填充状态计数
+    // statusCounts.forEach(item => {
+    //   totals[item.status] = parseInt(item.count, 10);
+    // });
+    // totals.TOTAL = totals.PENDING + totals.SUBMITTED + totals.ERROR + totals.RED_NOTE;
 
-    return {
-      items,
-      total,
-      page,
-      limit,
-      totals
-    };
+    // return {
+    //   items,
+    //   total,
+    //   page,
+    //   limit,
+    //   totals
+    // };
   }
 
   /**
