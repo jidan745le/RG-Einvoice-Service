@@ -100,7 +100,7 @@ export class EpicorService {
         url += `?${queryParams.join('&')}`;
       }
 
-      url += `?$expand=InvcDtls`;
+      url += `${queryParams.length > 0 ? '&' : '?'}$expand=InvcDtls`;
 
       const headers = {
         'Accept': 'application/json',

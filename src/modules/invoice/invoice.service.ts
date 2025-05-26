@@ -175,7 +175,7 @@ export class InvoiceService {
       );
 
       const epicorInvoicesRaw = epicorData.value || [];
-      this.logger.log(`Epicor invoices: ${JSON.stringify(epicorInvoicesRaw)}`);
+      // this.logger.log(`Epicor invoices: ${JSON.stringify(epicorInvoicesRaw)}`);
 
       // Transform the new API response structure
       const transformedInvoices: Invoice[] = [];
@@ -190,7 +190,7 @@ export class InvoiceService {
         invoice.orderNumber = epicorInvoice.OrderNum?.toString() || '';
         invoice.orderDate = epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : null;
         invoice.poNumber = epicorInvoice.PONum || '';
-        invoice.status = 'PENDING';
+        invoice.status = epicorInvoice.ELIEInvStatus === 0 ? 'PENDING' : epicorInvoice.ELIEInvStatus === 1 ? 'SUBMITTED' : 'ERROR';
         invoice.id = epicorInvoice.InvoiceNum;
         invoice.createdAt = epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : new Date();
         invoice.updatedAt = epicorInvoice.ELIEInvUpdatedOn ? new Date(epicorInvoice.ELIEInvUpdatedOn) : new Date();
@@ -201,9 +201,9 @@ export class InvoiceService {
           detail.erpInvoiceId = detailRaw.InvoiceNum;
           detail.lineDescription = detailRaw.LineDesc || '';
           detail.commodityCode = detailRaw.CommodityCode || '';
-          detail.uomDescription = detailRaw.IUM || '';
           detail.salesUm = detailRaw.SalesUM || '';
           detail.sellingShipQty = parseFloat(detailRaw.SellingShipQty || "0") || 0;
+          detail.uomDescription = `${detailRaw.sellingShipQty}${detailRaw.salesUm}`;
           detail.docUnitPrice = parseFloat(detailRaw.DocUnitPrice || "0") || 0;
           detail.docExtPrice = parseFloat(detailRaw.DocExtPrice || "0") || 0;
           detail.taxPercent = parseFloat(detailRaw.TaxPercent || "0") || 0;
@@ -216,7 +216,7 @@ export class InvoiceService {
 
       // Sorting is now on the current page's data. For global sorting, OData $orderby should be used.
       transformedInvoices.sort((a, b) => (b.orderDate?.getTime() || 0) - (a.orderDate?.getTime() || 0)); // Example sort by date
-      this.logger.log(`Transformed invoices: ${JSON.stringify(transformedInvoices)}`);
+      // this.logger.log(`Transformed invoices: ${JSON.stringify(transformedInvoices)}`);
       const totalItems = epicorData['@odata.count'] !== undefined ? epicorData['@odata.count'] : transformedInvoices.length;
       // If @odata.count is undefined and transformedInvoices.length is used, it's only the current page count if top/skip was effective.
 
@@ -544,18 +544,25 @@ export class InvoiceService {
     try {
       // Parse callback data
       const callbackJson = typeof callbackData === 'string' ? JSON.parse(callbackData) : callbackData;
+      this.logger.log(`Parsed callback JSON: ${JSON.stringify(callbackJson)}`);
+
       const data = typeof callbackJson.data === 'string' ? JSON.parse(callbackJson.data) : callbackJson.data;
+      this.logger.log(`Extracted callback data: ${JSON.stringify(data)}`);
 
       // 检查是否是合并发票的回调
       const orderNo = data.orderNo;
       if (orderNo && orderNo.startsWith('MERGE-')) {
+        this.logger.log(`Detected merged invoice callback for orderNo: ${orderNo}`);
         return this.processMergedInvoiceCallback(callbackData);
       }
 
       // Check if it's a successful invoice
       if (data.status === '01') { // 01 represents success
+        this.logger.log(`Processing successful invoice callback with status: ${data.status}`);
+
         // Find the invoice using orderNo which contains the ERP invoice ID
         const orderNo = data.orderNo;
+        this.logger.log(`Callback orderNo: ${orderNo}`);
 
         // Extract the erpInvoiceId if it's included in the orderNo
         let erpInvoiceId: number | undefined = undefined;
@@ -565,41 +572,70 @@ export class InvoiceService {
             const match = orderNo.match(/ORD-[a-f0-9]+-(\d+)/);
             if (match && match[1]) {
               erpInvoiceId = parseInt(match[1], 10);
+              this.logger.log(`Successfully extracted erpInvoiceId: ${erpInvoiceId} from orderNo: ${orderNo}`);
+            } else {
+              this.logger.warn(`No match found for erpInvoiceId pattern in orderNo: ${orderNo}`);
             }
           } catch (error) {
-            this.logger.warn(`Could not extract erpInvoiceId from : ${orderNo}`);
+            this.logger.error(`Error extracting erpInvoiceId from orderNo: ${orderNo}`, error.stack);
           }
+        } else {
+          this.logger.error('OrderNo is missing from callback data');
         }
 
         if (!erpInvoiceId) {
-          throw new Error(`Could not extract erpInvoiceId from orderNo: ${orderNo}`);
+          const errorMsg = `Could not extract erpInvoiceId from orderNo: ${orderNo}`;
+          this.logger.error(errorMsg);
+          throw new Error(errorMsg);
         }
 
         // Get Epicor configuration from default tenant (we'll need to enhance this to get the correct tenant)
         // For now, we'll use a default configuration approach
         const tenantId = 'default'; // This should be enhanced to get the correct tenant
-        const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice');
-        const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
+        this.logger.log(`Getting Epicor configuration for tenant: ${tenantId}`);
 
-        if (!serverSettings) {
-          throw new Error('Epicor server configuration not found');
+        try {
+          const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice');
+          this.logger.log(`Retrieved app config: ${appConfig ? 'success' : 'null'}`);
+
+          const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
+
+          if (!serverSettings) {
+            const errorMsg = 'Epicor server configuration not found';
+            this.logger.error(errorMsg);
+            throw new Error(errorMsg);
+          }
+
+          this.logger.log(`Epicor server settings - baseAPI: ${serverSettings.serverBaseAPI}, companyID: ${serverSettings.companyID}, userAccount: ${serverSettings.userAccount}`);
+
+          if (serverSettings.password === undefined) {
+            serverSettings.password = '';
+            this.logger.log('Password was undefined, set to empty string');
+          }
+
+          // Prepare update data
+          const updateData = {
+            ELIEInvoice: true,
+            ELIEInvStatus: 1, // 1 = SUBMITTED/SUCCESS
+            ELIEInvUpdatedBy: data.drawer || 'system',
+            ELIEInvException: `E-Invoice issued successfully: ${data.statusMessage}`,
+            ELIEInvUpdatedOn: new Date().toISOString(),
+            EInvRefNum: orderNo,
+            ELIEInvID: data.serialNo, // Use serialNo as E-Invoice ID
+            RowMod: 'U'
+          };
+
+          this.logger.log(`Updating invoice ${erpInvoiceId} in Epicor with data:`, JSON.stringify(updateData));
+
+          // Update invoice with e-invoice information in Epicor
+          await this.epicorService.updateInvoiceStatus(serverSettings, erpInvoiceId, updateData);
+
+          this.logger.log(`Successfully updated invoice ${erpInvoiceId} status in Epicor`);
+
+        } catch (configError) {
+          this.logger.error(`Error getting Epicor configuration or updating invoice status: ${configError.message}`, configError.stack);
+          throw configError;
         }
-
-        if (serverSettings.password === undefined) {
-          serverSettings.password = '';
-        }
-
-        // Update invoice with e-invoice information in Epicor
-        await this.epicorService.updateInvoiceStatus(serverSettings, erpInvoiceId, {
-          ELIEInvoice: true,
-          ELIEInvStatus: 1, // 1 = SUBMITTED/SUCCESS
-          ELIEInvUpdatedBy: data.drawer || 'system',
-          ELIEInvException: `E-Invoice issued successfully: ${data.statusMessage}`,
-          ELIEInvUpdatedOn: new Date().toISOString(),
-          EInvRefNum: orderNo,
-          ELIEInvID: data.serialNo, // Use serialNo as E-Invoice ID
-          RowMod: 'U'
-        });
 
         return {
           success: true,
@@ -614,41 +650,67 @@ export class InvoiceService {
       } else {
         // Handle error or other status
         this.logger.warn(`Received non-success status: ${data.status} - ${data.statusMessage}`);
+        this.logger.log(`Full error callback data: ${JSON.stringify(data)}`);
 
         // Try to extract erpInvoiceId from orderNo
         let erpInvoiceId: number | undefined = undefined;
         if (data.orderNo) {
+          this.logger.log(`Attempting to extract erpInvoiceId from error callback orderNo: ${data.orderNo}`);
           try {
             const match = data.orderNo.match(/ORD-[a-f0-9]+-(\d+)/);
             if (match && match[1]) {
               erpInvoiceId = parseInt(match[1], 10);
+              this.logger.log(`Successfully extracted erpInvoiceId: ${erpInvoiceId} from error callback`);
+            } else {
+              this.logger.warn(`No match found for erpInvoiceId pattern in error callback orderNo: ${data.orderNo}`);
             }
           } catch (error) {
-            this.logger.warn(`Could not extract erpInvoiceId from orderNo: ${data.orderNo}`);
+            this.logger.error(`Error extracting erpInvoiceId from error callback orderNo: ${data.orderNo}`, error.stack);
           }
+        } else {
+          this.logger.error('OrderNo is missing from error callback data');
         }
 
         if (erpInvoiceId) {
+          this.logger.log(`Updating invoice ${erpInvoiceId} with error status in Epicor`);
+
           // Get Epicor configuration
           const tenantId = 'default'; // This should be enhanced to get the correct tenant
-          const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice');
-          const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
 
-          if (serverSettings) {
-            if (serverSettings.password === undefined) {
-              serverSettings.password = '';
+          try {
+            const appConfig = await this.tenantConfigService.getAppConfig(tenantId, 'einvoice');
+            const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
+
+            if (serverSettings) {
+              this.logger.log(`Retrieved Epicor config for error update - baseAPI: ${serverSettings.serverBaseAPI}`);
+
+              if (serverSettings.password === undefined) {
+                serverSettings.password = '';
+              }
+
+              const errorUpdateData = {
+                ELIEInvoice: true,
+                ELIEInvStatus: 2, // 2 = ERROR
+                ELIEInvUpdatedBy: 'system',
+                ELIEInvException: `E-Invoice error: ${data.statusMessage || data.errorMessage || 'Unknown error'}`,
+                ELIEInvUpdatedOn: new Date().toISOString(),
+                EInvRefNum: data.orderNo,
+                RowMod: 'U'
+              };
+
+              this.logger.log(`Updating invoice ${erpInvoiceId} with error data:`, JSON.stringify(errorUpdateData));
+
+              await this.epicorService.updateInvoiceStatus(serverSettings, erpInvoiceId, errorUpdateData);
+
+              this.logger.log(`Successfully updated invoice ${erpInvoiceId} with error status in Epicor`);
+            } else {
+              this.logger.error('No Epicor server settings found for error callback processing');
             }
-
-            await this.epicorService.updateInvoiceStatus(serverSettings, erpInvoiceId, {
-              ELIEInvoice: true,
-              ELIEInvStatus: 2, // 2 = ERROR
-              ELIEInvUpdatedBy: 'system',
-              ELIEInvException: `E-Invoice error: ${data.statusMessage || data.errorMessage || 'Unknown error'}`,
-              ELIEInvUpdatedOn: new Date().toISOString(),
-              EInvRefNum: data.orderNo,
-              RowMod: 'U'
-            });
+          } catch (updateError) {
+            this.logger.error(`Failed to update invoice ${erpInvoiceId} with error status in Epicor: ${updateError.message}`, updateError.stack);
           }
+        } else {
+          this.logger.warn('Could not extract erpInvoiceId from error callback, skipping Epicor update');
         }
 
         return {
@@ -659,6 +721,7 @@ export class InvoiceService {
       }
     } catch (error) {
       this.logger.error(`Error processing callback: ${error.message}`, error.stack);
+      this.logger.error(`Original callback data that caused error: ${JSON.stringify(callbackData)}`);
       return {
         success: false,
         message: 'Error processing callback',
