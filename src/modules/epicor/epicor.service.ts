@@ -80,7 +80,7 @@ export class EpicorService {
     try {
       this.logger.log(`Fetching invoices from Epicor BAQ for company: ${epicorTenantConfig.companyID} with OData params: ${JSON.stringify(odataParams)}`);
 
-      let url = `${epicorTenantConfig.serverBaseAPI}/Erp.BO.ARInvoiceSvc`;
+      let url = `${epicorTenantConfig.serverBaseAPI}/Erp.BO.ARInvoiceSvc/ARInvoices?expand=InvcDtls`;
 
       const queryParams: string[] = [];
       if (odataParams?.filter && odataParams.filter.trim() !== '') {
