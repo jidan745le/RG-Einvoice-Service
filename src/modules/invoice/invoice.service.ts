@@ -646,6 +646,10 @@ export class InvoiceService {
           throw new Error(`Could not extract erpInvoiceId from orderNo: ${orderNo}`);
         }
 
+        this.logger.log(`erpInvoiceId: ${erpInvoiceId}`);
+        this.logger.log(`orderNo: ${orderNo}`);
+        this.logger.log(`data: ${JSON.stringify(this.authorizationCache)}`);
+
         // Get Epicor configuration using cached authorization from submit time
         // Extract orderNo to get cached authorization and tenant info
         const cachedAuth = this.getAuthorizationForCallback(orderNo);
