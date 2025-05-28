@@ -9,12 +9,15 @@ import { QueryInvoiceDto } from './dto/query-invoice.dto';
 import { BaiwangService } from '../baiwang/baiwang.service';
 import { EpicorService } from '../epicor/epicor.service';
 import { v4 as uuidv4 } from 'uuid';
-import { EpicorInvoice } from '../epicor/interfaces/epicor.interface';
+import { EpicorInvoice, EpicorInvoiceHeader } from '../epicor/interfaces/epicor.interface';
 import { TenantConfigService } from '../tenant/tenant-config.service';
 import { EpicorTenantConfig } from '../epicor/epicor.service';
 import { ConfigService } from '@nestjs/config';
 import { HttpService } from '@nestjs/axios';
 import { lastValueFrom } from 'rxjs';
+import { AuthorizationCacheService } from './authorization-cache.service';
+import { InvoiceQueryService } from './services/invoice-query.service';
+import { InvoiceOperationService } from './services/invoice-operation.service';
 
 @Injectable()
 export class InvoiceService {
@@ -774,7 +777,7 @@ export class InvoiceService {
       const request = {
         taxNo: companyInfo.taxNo || '338888888888SMB',
         orderNo,
-        originalSerialNo: originalInvoice.eInvoiceId,
+        originalSerialNo: originalInvoice.eInvoiceId || undefined,
         originalOrderNo: originalInvoice.orderNumber,
         originalDigitInvoiceNo: originalInvoice.digitInvoiceNo,
         callBackUrl: 'http://8.219.189.158:81/e-invoice/api/invoice/red/callback',
@@ -1439,5 +1442,14 @@ export class InvoiceService {
       this.logger.error(`Failed to update config: ${error.message}`, error.stack);
       throw error;
     }
+  }
+
+  /**
+   * 测试RPC连接到Customer Hub
+   * @returns RPC连接测试结果
+   */
+  async testRpcConnection(): Promise<any> {
+    this.logger.log('Testing RPC connection to Customer Hub');
+    return await this.tenantConfigService.testRpcConnection();
   }
 }

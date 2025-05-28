@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { lastValueFrom } from 'rxjs';
+import { CustomerHubRpcService } from './customer-hub-rpc.service';
 
 @Injectable()
 export class TenantConfigService {
@@ -12,6 +13,7 @@ export class TenantConfigService {
     constructor(
         private readonly httpService: HttpService,
         private readonly configService: ConfigService,
+        private readonly customerHubRpcService: CustomerHubRpcService,
     ) { }
 
     /**
@@ -105,5 +107,123 @@ export class TenantConfigService {
     async getCompanyInfo(tenantId: string, authorization?: string): Promise<any> {
         const appConfig = await this.getAppConfig(tenantId, 'einvoice', authorization);
         return appConfig?.settings?.companyInfo || {};
+    }
+
+    /**
+     * 根据应用获取拥有该应用的租户配置（使用RPC接口）
+     * @param appCode 应用代码
+     * @returns 租户配置列表
+     */
+    async getTenantsByApplication(appCode: string = 'einvoice'): Promise<any[]> {
+        this.logger.log(`Getting tenants by application via RPC: ${appCode}`);
+
+        try {
+            // 使用RPC调用获取租户配置列表
+            const tenantConfigs = await this.customerHubRpcService.getTenantsConfigByApplication(appCode);
+            this.logger.log(`Retrieved ${tenantConfigs.length} tenant configs for app: ${appCode} via RPC`);
+
+            // 转换为兼容的格式，保持向后兼容
+            const tenants = tenantConfigs.map(config => ({
+                tenantId: config.tenant.id,
+                tenantName: config.tenant.name,
+                status: 'active', // 默认状态
+                subscription_plan: config.tenant.subscription_plan,
+                application: config.application,
+                settings: config.settings
+            }));
+
+            return tenants;
+        } catch (error) {
+            this.logger.error(`RPC call failed for getTenantsConfigByApplication: ${error.message}`, error.stack);
+
+            // 如果RPC失败，尝试HTTP回退
+            this.logger.warn('Falling back to HTTP for getTenantsByApplication');
+            try {
+                const customerPortalUrl = this.configService.get<string>(
+                    'CUSTOMER_PORTAL_URL',
+                    'http://localhost:3000'
+                );
+
+                const response = await lastValueFrom(
+                    this.httpService.get(
+                        `${customerPortalUrl}/app-tenants?appcode=${appCode}`,
+                        {
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                        }
+                    )
+                );
+
+                this.logger.log(`Retrieved ${response.data?.length || 0} tenants for app: ${appCode} via HTTP fallback`);
+                return response.data || [];
+            } catch (httpError) {
+                this.logger.error(`HTTP fallback also failed: ${httpError.message}`, httpError.stack);
+                // 返回空数组，避免中断服务
+                return [];
+            }
+        }
+    }
+
+    /**
+     * 根据租户ID和应用代码获取配置（无需授权头的系统级调用，使用RPC接口）
+     * @param tenantId 租户ID
+     * @param appCode 应用代码
+     * @returns 应用配置
+     */
+    async getAppConfigByTenantId(tenantId: string, appCode: string = 'einvoice'): Promise<any> {
+        this.logger.log(`Getting app config by tenant ID via RPC: ${tenantId}, app: ${appCode}`);
+
+        try {
+            // 使用RPC调用获取配置
+            const tenantConfig = await this.customerHubRpcService.getAppConfigByTenantId(tenantId, appCode);
+            if (tenantConfig) {
+                this.logger.log(`Retrieved config for tenant ${tenantId} via RPC`);
+
+                // 转换为兼容的格式
+                return {
+                    tenant: tenantConfig.tenant,
+                    application: tenantConfig.application,
+                    settings: tenantConfig.settings
+                };
+            }
+        } catch (error) {
+            this.logger.error(`RPC call failed for getAppConfigByTenantId: ${error.message}`, error.stack);
+        }
+
+        // 如果RPC失败，尝试HTTP回退
+        this.logger.warn('Falling back to HTTP for getAppConfigByTenantId');
+        try {
+            const customerPortalUrl = this.configService.get<string>(
+                'CUSTOMER_PORTAL_URL',
+                'http://localhost:3000'
+            );
+
+            const response = await lastValueFrom(
+                this.httpService.get(
+                    `${customerPortalUrl}/tenant/${tenantId}/app-config?appcode=${appCode}`,
+                    {
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                    }
+                )
+            );
+
+            return response.data;
+        } catch (httpError) {
+            this.logger.error(`HTTP fallback also failed: ${httpError.message}`, httpError.stack);
+            // 返回null，表示该租户没有配置
+            return null;
+        }
+    }
+
+    /**
+     * 测试RPC连接
+     * @returns 连接测试结果
+     */
+    async testRpcConnection(): Promise<any> {
+        this.logger.log('Testing RPC connection to Customer Hub');
+        return await this.customerHubRpcService.testConnection();
     }
 } 

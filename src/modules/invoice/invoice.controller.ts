@@ -17,6 +17,9 @@ import { CreateInvoiceDto } from './dto/create-invoice.dto';
 import { QueryInvoiceDto } from './dto/query-invoice.dto';
 import { UpdateInvoiceDto } from './dto/update-invoice.dto';
 import { InvoiceService } from './invoice.service';
+import { InvoiceQueryService } from './services/invoice-query.service';
+import { InvoiceOperationService } from './services/invoice-operation.service';
+import { InvoiceCacheService } from './services/invoice-cache.service';
 import { RedInvoiceRequestDto } from './dto/red-invoice.dto';
 import { Public } from '../auth/decorators/public.decorator';
 import { MergeInvoicesDto } from './dto/merge-invoices.dto';
@@ -38,7 +41,12 @@ interface RequestWithUser extends Request {
 export class InvoiceController {
   private readonly logger = new Logger(InvoiceController.name);
 
-  constructor(private readonly invoiceService: InvoiceService) { }
+  constructor(
+    private readonly invoiceService: InvoiceService, // Keep for config and legacy operations
+    private readonly invoiceQueryService: InvoiceQueryService, // New caching query service
+    private readonly invoiceOperationService: InvoiceOperationService, // New operations service
+    private readonly invoiceCacheService: InvoiceCacheService, // Cache service for direct access
+  ) { }
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
@@ -63,7 +71,8 @@ export class InvoiceController {
       this.logger.warn('Tenant ID not found in request for findAll');
     }
 
-    return this.invoiceService.findAll(queryDto, tenantId, authorization);
+    // Use the new caching-aware query service
+    return this.invoiceQueryService.findAll(queryDto, tenantId, authorization);
   }
 
   /**
@@ -144,7 +153,8 @@ export class InvoiceController {
 
   @Get(':id')
   async findOne(@Param('id') id: string) {
-    return this.invoiceService.findOne(+id);
+    // Use the operation service for single invoice queries
+    return this.invoiceOperationService.findOne(+id);
   }
 
   @Patch(':id')
@@ -156,7 +166,7 @@ export class InvoiceController {
   }
 
   /**
-   * Submit invoice for e-invoicing
+   * Submit invoice for e-invoicing - Now uses the new operation service
    * @param id Invoice ID
    * @param submittedBy User who submitted the invoice
    * @returns Result of submission
@@ -172,7 +182,9 @@ export class InvoiceController {
     const tenantId = request.user?.tenantId || request.user?.tenant?.id || 'default';
     const authorization = request.headers.authorization;
     this.logger.log(`Submitting invoice ${id} by ${submittedBy} for tenant ${tenantId}`);
-    return this.invoiceService.submitInvoice(+id, submittedBy, tenantId, authorization);
+
+    // Use the new operation service
+    return this.invoiceOperationService.submitInvoice(+id, submittedBy, tenantId, authorization);
   }
 
   @Post('callback')
@@ -219,7 +231,7 @@ export class InvoiceController {
   }
 
   /**
-   * Merge multiple invoices for the same customer
+   * Merge multiple invoices for the same customer - Now uses the new operation service
    * @param mergeDto DTO containing invoice IDs to merge and submitter
    * @returns Result of merge and submission
    */
@@ -233,7 +245,9 @@ export class InvoiceController {
     const tenantId = request.user?.tenantId || 'default';
     const authorization = request.headers.authorization;
     this.logger.log(`Merging invoices: ${mergeDto.erpInvoiceIds.join(', ')} by ${mergeDto.submittedBy} for tenant ${tenantId}`);
-    return this.invoiceService.mergeAndSubmitInvoices(mergeDto, tenantId, authorization);
+
+    // Use the new operation service
+    return this.invoiceOperationService.mergeAndSubmitInvoices(mergeDto, tenantId, authorization);
   }
 
   /**
@@ -248,5 +262,56 @@ export class InvoiceController {
     const authorization = request.headers.authorization;
     this.logger.log(`Starting database cleanup and resync for tenant ${tenantId}`);
     return this.invoiceService.cleanupAndResync(tenantId, authorization);
+  }
+
+  // ===== 新增缓存管理相关端点 =====
+
+
+
+  /**
+   * 获取缓存统计信息
+   * @returns 缓存统计
+   */
+  @Get('/cache/stats')
+  @HttpCode(HttpStatus.OK)
+  async getCacheStats() {
+    this.logger.log('Getting cache statistics');
+    return this.invoiceQueryService.getCacheStats();
+  }
+
+  /**
+   * 清理过期缓存
+   * @param olderThanDays 清理多少天前的数据
+   * @returns 清理结果
+   */
+  @Post('/cache/cleanup')
+  @HttpCode(HttpStatus.OK)
+  async cleanupOldCache(@Body('olderThanDays') olderThanDays: number = 30) {
+    this.logger.log(`Cleaning up cache data older than ${olderThanDays} days`);
+    return this.invoiceQueryService.cleanupOldCache(olderThanDays);
+  }
+
+  /**
+   * 测试获取所有租户配置（调试用）
+   * @returns 租户配置列表
+   */
+  @Get('/cache/test-tenant-configs')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  async testTenantConfigs() {
+    this.logger.log('Testing tenant configurations');
+    return this.invoiceCacheService.testGetAllTenantConfigs();
+  }
+
+  /**
+   * 测试RPC连接到Customer Hub
+   * @returns RPC连接测试结果
+   */
+  @Get('/cache/test-rpc-connection')
+  @HttpCode(HttpStatus.OK)
+  async testRpcConnection(@Req() request: RequestWithUser) {
+    const tenantId = request.user?.tenantId || request.user?.tenant?.id;
+    this.logger.log(`Testing RPC connection for tenant: ${tenantId}`);
+    return this.invoiceService.testRpcConnection();
   }
 }

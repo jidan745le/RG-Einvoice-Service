@@ -10,7 +10,7 @@ export class Invoice {
   erpInvoiceId: number;
 
   @Column({ name: 'post_date', type: 'date', nullable: true })
-  postDate: Date;
+  postDate: Date | null;
 
   @Column({ name: 'erp_invoice_description', nullable: true })
   erpInvoiceDescription: string;
@@ -39,17 +39,17 @@ export class Invoice {
   @Column({ name: 'digit_invoice_no', nullable: true })
   digitInvoiceNo: string;
 
-  @Column({ name: 'e_invoice_id', nullable: true })
-  eInvoiceId: string;
+  @Column({ name: 'e_invoice_id', nullable: true, type: 'varchar' })
+  eInvoiceId: string | null;
 
-  @Column({ name: 'e_invoice_pdf', nullable: true })
+  @Column({ name: 'e_invoice_pdf', nullable: true, type: 'varchar' })
   eInvoicePdf: string;
 
   @Column({ name: 'e_invoice_date', type: 'date', nullable: true })
-  eInvoiceDate: Date;
+  eInvoiceDate: Date | null;
 
-  @Column({ name: 'submitted_by', nullable: true })
-  submittedBy: string;
+  @Column({ name: 'submitted_by', nullable: true, type: 'varchar' })
+  submittedBy: string | null;
 
   @Column({ name: 'order_date', type: 'date', nullable: true })
   orderDate: Date | null;
@@ -57,8 +57,8 @@ export class Invoice {
   @Column({ name: 'po_number', nullable: true })
   poNumber: string;
 
-  @Column({ nullable: true })
-  comment: string;
+  @Column({ name: 'comment', nullable: true, type: 'varchar' })
+  comment: string | null;
 
   @Column({ nullable: true })
   redInfoNo: string;
@@ -74,6 +74,12 @@ export class Invoice {
 
   @Column({ nullable: true })
   redInfoType: string;
+
+  @Column({ name: 'has_pdf', type: 'boolean', default: false })
+  hasPdf: boolean;
+
+  @Column({ name: 'epicor_tenant_company', nullable: true, type: 'varchar' })
+  epicorTenantCompany: string | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

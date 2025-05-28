@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package customerhub;
+
+// Customer Hub服务定义
+service CustomerHubService {
+  // 根据应用代码获取租户配置列表
+  rpc GetTenantsConfigByApplication(GetTenantsConfigRequest) returns (GetTenantsConfigResponse);
+  
+  // 根据租户ID获取应用配置（系统级调用）
+  rpc GetAppConfigByTenantId(GetConfigRequest) returns (GetConfigResponse);
+  
+  // 测试连接
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+// 获取租户配置列表的请求
+message GetTenantsConfigRequest {
+  string appCode = 1;  // 应用代码，如 'einvoice'
+}
+
+// 获取租户配置列表的响应
+message GetTenantsConfigResponse {
+  repeated TenantConfig configs = 1;  // 租户配置列表
+}
+
+// 租户配置信息
+message TenantConfig {
+  TenantInfo tenant = 1;           // 租户信息
+  ApplicationInfo application = 2;  // 应用信息
+  string settings = 3;             // 设置（JSON字符串格式）
+}
+
+// 租户信息
+message TenantInfo {
+  string id = 1;                   // 租户ID
+  string name = 2;                 // 租户名称
+  string subscription_plan = 3;    // 订阅计划
+}
+
+// 应用信息
+message ApplicationInfo {
+  string id = 1;    // 应用ID
+  string code = 2;  // 应用代码
+  string name = 3;  // 应用名称
+  string path = 4;  // 应用路径
+  string url = 5;   // 应用URL
+}
+
+// 获取配置的请求（系统级）
+message GetConfigRequest {
+  string tenantId = 1;  // 租户ID
+  string appCode = 2;   // 应用代码
+}
+
+// 获取配置的响应
+message GetConfigResponse {
+  TenantConfig config = 1;  // 租户配置
+}
+
+// Ping请求
+message PingRequest {
+  int64 timestamp = 1;  // 时间戳
+}
+
+// Ping响应
+message PingResponse {
+  bool pong = 1;        // 响应标识
+  int64 timestamp = 2;  // 服务器时间戳
+} 

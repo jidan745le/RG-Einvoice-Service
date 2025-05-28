@@ -5,6 +5,7 @@
   "compilerOptions": {
     "deleteOutDir": true,
     "assets": [
+      "**/*.proto",
       "**/*.env",
       "**/*.xlsx",
       "scripts/*.ts"
