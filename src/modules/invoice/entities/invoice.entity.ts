@@ -1,7 +1,8 @@
-import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, OneToMany } from 'typeorm';
+import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, OneToMany, Unique } from 'typeorm';
 import { InvoiceDetail } from './invoice-detail.entity';
 
 @Entity('invoices')
+@Unique(['erpInvoiceId', 'epicorTenantCompany'])
 export class Invoice {
   @PrimaryGeneratedColumn()
   id: number;

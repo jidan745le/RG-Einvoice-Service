@@ -70,7 +70,7 @@ export class InvoiceController {
       // For non-Epicor queries, just log a warning if tenantId is missing
       this.logger.warn('Tenant ID not found in request for findAll');
     }
-
+    console.log(tenantId, JSON.stringify(request.user), 'tenantId');
     // Use the new caching-aware query service
     return this.invoiceQueryService.findAll(queryDto, tenantId, authorization);
   }
@@ -192,7 +192,7 @@ export class InvoiceController {
   @HttpCode(HttpStatus.OK)
   async callback(@Body() callbackData: any) {
     this.logger.log(`Received callback: ${JSON.stringify(callbackData)}`);
-    return this.invoiceService.processCallback(callbackData);
+    return this.invoiceOperationService.processCallback(callbackData);
   }
 
   @Post('sync')

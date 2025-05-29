@@ -33,7 +33,7 @@ export class InvoiceCacheService {
      * 增量同步服务 - 每3分钟执行一次
      * 从Epicor获取增量数据并更新本地缓存
      */
-    @Cron('*/5 * * * *') // Every 5 minutes
+    @Cron('*/3 * * * *') // Every 5 minutes
     async performIncrementalSync(): Promise<void> {
         this.logger.log('Starting scheduled incremental sync from Epicor for all tenants');
 
@@ -138,7 +138,7 @@ export class InvoiceCacheService {
             // 例如: https://simalfa.kineticcloud.cn/simalfaprod/api/v1 -> simalfaprod
             const url = new URL(serverBaseAPI);
             const pathParts = url.pathname.split('/').filter(part => part.length > 0);
-            const environment = pathParts.find(part => part !== 'api' && part !== 'v1') || 'default';
+            const environment = pathParts.find(part => part !== 'api' && part !== 'v1' && part !== 'v2') || 'default';
 
             return `${environment}_${companyID}`;
         } catch (error) {
@@ -163,8 +163,8 @@ export class InvoiceCacheService {
             // 构建增量查询过滤器
             const filterClauses: string[] = [];
             if (lastSync) {
-                const formattedDate = lastSync.toISOString().split('T')[0];
-                filterClauses.push(`InvcHead_InvoiceDate ge datetime'${formattedDate}'`);
+                const formattedDate = lastSync.toISOString();
+                filterClauses.push(`CreatedOn ge ${formattedDate}`);
             }
 
             const odataFilter = filterClauses.join(' and ');
@@ -174,12 +174,16 @@ export class InvoiceCacheService {
                 serverSettings,
                 {
                     filter: odataFilter,
-                    top: 500 // 限制单次同步数量
+                    top: 1000, // 限制单次同步数量
+                    select: 'InvoiceNum,Description,CNTaxInvoiceType,InvoiceComment,ELIEInvStatus,ELIEInvID,ELIEInvUpdatedBy,ELIEInvUpdatedOn,PONum,OrderNum,InvoiceDate,CustomerName',
+                    expand: 'InvcDtls($select=InvoiceNum,LineDesc,CommodityCode,SalesUM,SellingShipQty,DocUnitPrice,DocExtPrice;$expand=InvcTaxes($select=Percent))',
+                    orderBy: 'CreatedOn desc',
+                    // count: true
                 }
             ) as EpicorResponse;
 
             const epicorInvoices = epicorData.value || [] as EpicorInvoice[];
-
+            console.log("epicorInvoices", epicorInvoices.slice(0, 10), epicorInvoices.length)
             if (epicorInvoices.length === 0) {
                 this.logger.log(`No new data found for tenant ${tenantId} (${epicorTenantCompany})`);
                 return { success: true, message: 'No new data', processed: 0, tenantId, epicorTenantCompany };
@@ -217,12 +221,9 @@ export class InvoiceCacheService {
         return lastInvoice?.createdAt || null;
     }
 
-    /**
-     * 处理增量发票数据（只插入，不更新）
-     * @param epicorInvoices Epicor发票数据
-     * @param epicorTenantCompany 租户公司标识
-     */
-    private async processIncrementalInvoices(epicorInvoices: EpicorInvoice[], epicorTenantCompany: string): Promise<number> {
+
+
+    private async processIncrementalInvoices(epicorInvoices: any[], epicorTenantCompany: string): Promise<number> {
         let processedCount = 0;
 
         for (const epicorInvoice of epicorInvoices) {
@@ -230,14 +231,14 @@ export class InvoiceCacheService {
                 // 检查发票是否已存在（基于erpInvoiceId和epicorTenantCompany）
                 const existingInvoice = await this.invoiceRepository.findOne({
                     where: {
-                        erpInvoiceId: epicorInvoice.InvcHead_InvoiceNum,
+                        erpInvoiceId: epicorInvoice.InvoiceNum.toString(),
                         epicorTenantCompany
                     }
                 });
 
                 if (existingInvoice) {
                     // 如果已存在，跳过（不更新）
-                    this.logger.debug(`Invoice ${epicorInvoice.InvcHead_InvoiceNum} already exists for ${epicorTenantCompany}, skipping`);
+                    this.logger.debug(`Invoice ${epicorInvoice.InvoiceNum} already exists for ${epicorTenantCompany}, skipping`);
                     continue;
                 }
 
@@ -246,76 +247,75 @@ export class InvoiceCacheService {
                 processedCount++;
 
             } catch (error) {
-                this.logger.error(`Error processing invoice ${epicorInvoice.InvcHead_InvoiceNum} for ${epicorTenantCompany}: ${error.message}`);
+                this.logger.error(`Error processing invoice ${epicorInvoice.InvoiceNum} for ${epicorTenantCompany}: ${error.message}`);
             }
         }
 
         return processedCount;
     }
 
-    /**
-     * 从Epicor数据创建新发票
-     * @param epicorInvoice Epicor发票数据
-     * @param epicorTenantCompany 租户公司标识
-     */
-    private async createNewInvoiceFromEpicor(epicorInvoice: EpicorInvoice, epicorTenantCompany: string): Promise<Invoice> {
+
+    private async createNewInvoiceFromEpicor(epicorInvoice: any, epicorTenantCompany: string): Promise<Invoice> {
+        // 计算总金额，从明细中汇总
+        let totalAmount = 0;
+        if (epicorInvoice.InvcDtls && epicorInvoice.InvcDtls.length > 0) {
+            totalAmount = epicorInvoice.InvcDtls.reduce((sum, detail) => sum + (detail.DocExtPrice || 0), 0);
+        }
+
         const invoice = this.invoiceRepository.create({
-            erpInvoiceId: epicorInvoice.InvcHead_InvoiceNum,
-            erpInvoiceDescription: epicorInvoice.InvcHead_Description || '',
-            fapiaoType: epicorInvoice.InvcHead_CNTaxInvoiceType?.toString() || '',
-            customerName: epicorInvoice.Customer_Name || '',
-            customerResaleId: epicorInvoice.Customer_ResaleID || '',
-            invoiceComment: epicorInvoice.InvcHead_InvoiceComment || '',
-            orderNumber: epicorInvoice.OrderHed_OrderNum?.toString() || '',
-            orderDate: epicorInvoice.OrderHed_OrderDate ? new Date(epicorInvoice.OrderHed_OrderDate) : null,
-            postDate: epicorInvoice.OrderHed_OrderDate ? new Date(epicorInvoice.OrderHed_OrderDate) : null,
-            poNumber: epicorInvoice.OrderHed_PONum || '',
-            invoiceAmount: 0, // Will be calculated from details
-            status: epicorInvoice.InvcHead_ELIEInvStatus === 0 ? 'PENDING' :
-                epicorInvoice.InvcHead_ELIEInvStatus === 1 ? 'SUBMITTED' : 'ERROR',
-            eInvoiceId: epicorInvoice.InvcHead_ELIEInvID || null,
-            submittedBy: epicorInvoice.InvcHead_ELIEInvUpdatedBy || null,
-            eInvoiceDate: epicorInvoice.InvcHead_ELIEInvUpdatedOn ? new Date(epicorInvoice.InvcHead_ELIEInvUpdatedOn) : null,
-            hasPdf: !!epicorInvoice.InvcHead_ELIEInvID,
-            epicorTenantCompany, // 设置租户公司标识
+            erpInvoiceId: epicorInvoice.InvoiceNum.toString(),
+            erpInvoiceDescription: epicorInvoice.Description || '',
+            fapiaoType: epicorInvoice.CNTaxInvoiceType?.toString() || '',
+            customerName: epicorInvoice.CustomerName || '', // 注意：JSON中似乎没有这个字段
+            customerResaleId: epicorInvoice.CustomerResaleID || '', // 注意：JSON中似乎没有这个字段
+            invoiceComment: epicorInvoice.InvoiceComment || '',
+            orderNumber: epicorInvoice.OrderNum?.toString() || '',
+            orderDate: epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : null, // 注意：JSON中似乎没有这个字段
+            postDate: epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : null,
+            poNumber: epicorInvoice.PONum?.toString() || '',
+            invoiceAmount: totalAmount,
+            status: epicorInvoice.ELIEInvStatus === 0 ? 'PENDING' :
+                epicorInvoice.ELIEInvStatus === 1 ? 'SUBMITTED' : 'ERROR',
+            eInvoiceId: epicorInvoice.ELIEInvID || null,
+            submittedBy: epicorInvoice.ELIEInvUpdatedBy || null,
+            eInvoiceDate: epicorInvoice.ELIEInvUpdatedOn ? new Date(epicorInvoice.ELIEInvUpdatedOn) : null,
+            hasPdf: !!epicorInvoice.ELIEInvID,
+            epicorTenantCompany,
         });
 
         const savedInvoice = await this.invoiceRepository.save(invoice);
 
-        // Create invoice detail from the single EpicorInvoice record
-        const invoiceDetail = this.invoiceDetailRepository.create({
-            invoiceId: savedInvoice.id,
-            erpInvoiceId: epicorInvoice.InvcDtl_InvoiceNum,
-            lineDescription: epicorInvoice.InvcDtl_LineDesc || '',
-            commodityCode: epicorInvoice.InvcDtl_CommodityCode || '',
-            salesUm: epicorInvoice.InvcDtl_SalesUM || '',
-            sellingShipQty: parseFloat(epicorInvoice.InvcDtl_SellingShipQty || '0') || 0,
-            docUnitPrice: parseFloat(epicorInvoice.InvcDtl_DocUnitPrice || '0') || 0,
-            docExtPrice: parseFloat(epicorInvoice.InvcDtl_DocExtPrice || '0') || 0,
-            taxPercent: parseFloat(epicorInvoice.InvcTax_Percent || '0') || 0,
-        });
+        // 处理多个发票明细
+        if (epicorInvoice.InvcDtls && epicorInvoice.InvcDtls.length > 0) {
+            for (const detail of epicorInvoice.InvcDtls) {
+                // 获取税率百分比，如果存在
+                let taxPercent = 0;
+                if (detail.InvcTaxes && detail.InvcTaxes.length > 0) {
+                    taxPercent = detail.InvcTaxes[0].Percent || 0;
+                }
 
-        await this.invoiceDetailRepository.save(invoiceDetail);
+                const invoiceDetail = this.invoiceDetailRepository.create({
+                    invoiceId: savedInvoice.id,
+                    erpInvoiceId: detail.InvoiceNum.toString(),
+                    lineDescription: detail.LineDesc || '',
+                    commodityCode: detail.CommodityCode || '',
+                    salesUm: detail.SalesUM || '',
+                    sellingShipQty: detail.SellingShipQty || 0,
+                    docUnitPrice: detail.DocUnitPrice || 0,
+                    docExtPrice: detail.DocExtPrice || 0,
+                    taxPercent: taxPercent,
+                });
+
+                await this.invoiceDetailRepository.save(invoiceDetail);
+            }
+        }
 
         return savedInvoice;
     }
 
-    // /**
-    //  * 手动触发增量同步
-    //  * @param tenantId 租户ID
-    //  * @param authorization 授权头
-    //  */
-    // async triggerIncrementalSync(tenantId?: string, authorization?: string): Promise<any> {
-    //     this.logger.log(`Manual incremental sync triggered for tenant: ${tenantId || 'all tenants'}`);
 
-    //     if (tenantId && authorization) {
-    //         // 为特定租户执行同步
-    //         return this.syncIncrementalDataForSpecificTenant(tenantId, authorization);
-    //     } else {
-    //         // 为所有租户执行同步
-    //         return this.performIncrementalSync();
-    //     }
-    // }
+
+
 
     /**
      * 为特定租户执行增量同步（使用授权头）
@@ -361,7 +361,7 @@ export class InvoiceCacheService {
      * @param queryDto 查询参数
      * @returns 发票列表和统计信息
      */
-    async findAllFromCache(queryDto: QueryInvoiceDto): Promise<{
+    async findAllFromCache(queryDto: QueryInvoiceDto, tenantId?: string): Promise<{
         items: Invoice[];
         total: number;
         page: number;
@@ -375,10 +375,26 @@ export class InvoiceCacheService {
         };
     }> {
         const { page = 1, limit = 10, ...filters } = queryDto;
+        let epicorTenantCompany = '';
+        if (tenantId) {
+            const appConfig = await this.tenantConfigService.getAppConfigByTenantId(tenantId, 'einvoice');
+            const company = appConfig?.settings?.serverSettings?.companyID;
+            const serverBaseAPI = appConfig?.settings?.serverSettings?.serverBaseAPI;
+            epicorTenantCompany = this.generateEpicorTenantCompany(
+                serverBaseAPI,
+                company
+            );
+        }
 
         // 构建查询条件
         const queryBuilder = this.invoiceRepository.createQueryBuilder('invoice')
             .leftJoinAndSelect('invoice.invoiceDetails', 'details');
+
+        if (epicorTenantCompany) {
+            queryBuilder.andWhere('invoice.epicorTenantCompany = :epicorTenantCompany', {
+                epicorTenantCompany
+            });
+        }
 
         // 应用过滤条件
         if (filters.erpInvoiceId) {
@@ -449,7 +465,7 @@ export class InvoiceCacheService {
             .getMany();
 
         // 计算状态统计
-        const statusCounts = await this.getStatusCounts(filters);
+        const statusCounts = await this.getStatusCounts(filters, epicorTenantCompany);
 
         return {
             items,
@@ -464,7 +480,7 @@ export class InvoiceCacheService {
      * 获取状态统计
      * @param filters 过滤条件
      */
-    private async getStatusCounts(filters: any): Promise<{
+    private async getStatusCounts(filters: any, epicorTenantCompany?: string): Promise<{
         PENDING: number;
         SUBMITTED: number;
         ERROR: number;
@@ -472,6 +488,12 @@ export class InvoiceCacheService {
         [key: string]: number;
     }> {
         const queryBuilder = this.invoiceRepository.createQueryBuilder('invoice');
+
+        if (epicorTenantCompany) {
+            queryBuilder.andWhere('invoice.epicorTenantCompany = :epicorTenantCompany', {
+                epicorTenantCompany
+            });
+        }
 
         // 应用相同的过滤条件（除了状态）
         if (filters.erpInvoiceId) {
@@ -518,11 +540,13 @@ export class InvoiceCacheService {
             SUBMITTED: 0,
             ERROR: 0,
             RED_NOTE: 0,
+            TOTAL: 0,
         };
 
         results.forEach(result => {
             totals[result.status] = parseInt(result.count);
         });
+        totals.TOTAL = totals.PENDING + totals.SUBMITTED + totals.ERROR + totals.RED_NOTE;
 
         return totals;
     }
@@ -654,12 +678,7 @@ export class InvoiceCacheService {
             return {
                 success: true,
                 tenantCount: configs.length,
-                configs: configs.map(config => ({
-                    tenantId: config.tenantId,
-                    epicorTenantCompany: config.epicorTenantCompany,
-                    serverBaseAPI: config.serverSettings.serverBaseAPI,
-                    companyID: config.serverSettings.companyID
-                }))
+                configs: configs
             };
         } catch (error) {
             this.logger.error(`Error testing tenant configs: ${error.message}`, error.stack);

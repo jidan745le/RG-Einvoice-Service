@@ -53,7 +53,7 @@ export class InvoiceQueryService {
 
             // 默认使用本地缓存查询
             this.logger.log('Querying from local cache');
-            const result = await this.invoiceCacheService.findAllFromCache(queryDto);
+            const result = await this.invoiceCacheService.findAllFromCache(queryDto, tenantId);
             return { ...result, dataSource: 'cache' };
 
         } catch (error) {

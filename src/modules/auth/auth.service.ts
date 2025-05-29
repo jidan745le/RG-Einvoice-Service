@@ -2,7 +2,6 @@ import { Injectable, Logger, UnauthorizedException, HttpException, HttpStatus } 
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { lastValueFrom } from 'rxjs';
-
 @Injectable()
 export class AuthService {
     private readonly logger = new Logger(AuthService.name);

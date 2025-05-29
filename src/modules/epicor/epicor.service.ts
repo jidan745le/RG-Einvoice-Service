@@ -75,37 +75,52 @@ export class EpicorService {
 
   async fetchAllInvoicesFromBaq(
     epicorTenantConfig: EpicorTenantConfig,
-    odataParams?: { filter?: string; top?: number; skip?: number; count?: boolean }
+    odataParams?: { select?: string; filter?: string; top?: number; skip?: number; count?: boolean, expand?: string, orderBy?: string }
   ): Promise<EpicorResponse & { '@odata.count'?: number }> {
     try {
       this.logger.log(`Fetching invoices from Epicor BAQ for company: ${epicorTenantConfig.companyID} with OData params: ${JSON.stringify(odataParams)}`);
 
-      let url = `${epicorTenantConfig.serverBaseAPI}/Erp.BO.ARInvoiceSvc/ARInvoices`;
+      let url = `${epicorTenantConfig.serverBaseAPI}/odata/${epicorTenantConfig.companyID}/Erp.BO.ARInvoiceSvc/ARInvoices`;
 
       const queryParams: string[] = [];
       if (odataParams?.filter && odataParams.filter.trim() !== '') {
         queryParams.push(`$filter=${odataParams.filter}`);
       }
-      // if (odataParams?.top !== undefined) {
-      //   queryParams.push(`$top=${odataParams.top}`);
-      // }
-      // if (odataParams?.skip !== undefined) {
-      //   queryParams.push(`$skip=${odataParams.skip}`);
-      // }
-      // if (odataParams?.count) {
-      //   queryParams.push(`$count=true`);
-      // }
+
+      if (odataParams?.select && odataParams.select.trim() !== '') {
+        queryParams.push(`$select=${odataParams.select}`);
+      }
+
+      if (odataParams?.top !== undefined) {
+        queryParams.push(`$top=${odataParams.top}`);
+      }
+
+      if (odataParams?.skip !== undefined) {
+        queryParams.push(`$skip=${odataParams.skip}`);
+      }
+
+      if (odataParams?.count) {
+        queryParams.push(`$count=true`);
+      }
+
+      if (odataParams?.expand) {
+        queryParams.push(`$expand=${odataParams.expand}`);
+      }
+
+      if (odataParams?.orderBy) {
+        queryParams.push(`$orderby=${odataParams.orderBy}`);
+      }
 
       if (queryParams.length > 0) {
         url += `?${queryParams.join('&')}`;
       }
 
-      url += `${queryParams.length > 0 ? '&' : '?'}$expand=InvcDtls&$top=1000`;
 
+      console.log("url", url)
       const headers = {
         'Accept': 'application/json',
         'Authorization': `Basic ${Buffer.from(`${epicorTenantConfig.userAccount}:${epicorTenantConfig.password || ''}`).toString('base64')}`,
-        'callsettings': `{"Company":"${epicorTenantConfig.companyID}"}`,
+        'X-API-Key': "gBoukRpXcusuBo38fZqF5pje6KqbcXvC6kbeOfNsLOnUi",
       };
 
       this.logger.log(`Requesting Epicor BAQ URL: ${url}`);
@@ -139,12 +154,12 @@ export class EpicorService {
     try {
       this.logger.log(`Fetching invoice ${invoiceId} from Epicor for company: ${epicorTenantConfig.companyID}`);
 
-      const url = `${epicorTenantConfig.serverBaseAPI}/Erp.BO.ARInvoiceSvc/ARInvoices(${epicorTenantConfig.companyID},${invoiceId})?$expand=InvcDtls`;
+      const url = `${epicorTenantConfig.serverBaseAPI}/odata/${epicorTenantConfig.companyID}/Erp.BO.ARInvoiceSvc/ARInvoices('${epicorTenantConfig.companyID}',${invoiceId})?$expand=InvcDtls`;
 
       const headers = {
         'Accept': 'application/json',
         'Authorization': `Basic ${Buffer.from(`${epicorTenantConfig.userAccount}:${epicorTenantConfig.password || ''}`).toString('base64')}`,
-        'callsettings': `{"Company":"${epicorTenantConfig.companyID}"}`,
+        'X-API-Key': "gBoukRpXcusuBo38fZqF5pje6KqbcXvC6kbeOfNsLOnUi"
       };
 
       this.logger.log(`Requesting Epicor invoice URL: ${url}`);
@@ -192,13 +207,12 @@ export class EpicorService {
     try {
       this.logger.log(`Updating invoice ${invoiceId} status in Epicor for company: ${epicorTenantConfig.companyID}`);
 
-      const url = `${epicorTenantConfig.serverBaseAPI}/Erp.BO.ARInvoiceSvc/ARInvoices(${epicorTenantConfig.companyID},${invoiceId})`;
+      const url = `${epicorTenantConfig.serverBaseAPI}/odata/${epicorTenantConfig.companyID}/Erp.BO.ARInvoiceSvc/ARInvoices('${epicorTenantConfig.companyID}',${invoiceId})`;
 
       const headers = {
-        'Accept': '*/*',
-        'Content-Type': 'application/json',
+        'Accept': 'application/json',
         'Authorization': `Basic ${Buffer.from(`${epicorTenantConfig.userAccount}:${epicorTenantConfig.password || ''}`).toString('base64')}`,
-        'callsettings': `{"Company":"${epicorTenantConfig.companyID}"}`,
+        'X-API-Key': "gBoukRpXcusuBo38fZqF5pje6KqbcXvC6kbeOfNsLOnUi"
       };
 
       this.logger.log(`Updating Epicor invoice URL: ${url} with data: ${JSON.stringify(updateData)}`);
@@ -207,6 +221,7 @@ export class EpicorService {
       );
 
       this.logger.log(`Updated invoice ${invoiceId} status in Epicor successfully`);
+
       return response.data;
     } catch (error) {
       this.logger.error(`Error updating invoice ${invoiceId} status in Epicor: ${error.message}`, error.stack);
