@@ -245,8 +245,10 @@ export class InvoiceController {
     // 从请求中获取租户ID和认证头
     const tenantId = request.user?.tenantId || 'default';
     const authorization = request.headers.authorization;
-    this.logger.log(`Merging invoices: ${mergeDto.erpInvoiceIds.join(', ')} by ${mergeDto.submittedBy} for tenant ${tenantId}`);
+    const submittedBy = request.user?.name || 'default';
 
+    this.logger.log(`Merging invoices: ${mergeDto.erpInvoiceIds.join(', ')} by ${submittedBy} for tenant ${tenantId}`);
+    mergeDto.submittedBy = submittedBy;
     // Use the new operation service
     return this.invoiceOperationService.mergeAndSubmitInvoices(mergeDto, tenantId, authorization);
   }

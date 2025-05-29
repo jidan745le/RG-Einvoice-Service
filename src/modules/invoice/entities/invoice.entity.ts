@@ -46,6 +46,9 @@ export class Invoice {
   @Column({ name: 'e_invoice_pdf', nullable: true, type: 'varchar' })
   eInvoicePdf: string;
 
+  @Column({ name: 'serial_no', nullable: true, type: 'varchar' })
+  serialNo: string | null;
+
   @Column({ name: 'e_invoice_date', type: 'date', nullable: true })
   eInvoiceDate: Date | null;
 

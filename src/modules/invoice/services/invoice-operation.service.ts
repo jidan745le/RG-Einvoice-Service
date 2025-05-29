@@ -632,7 +632,7 @@ export class InvoiceOperationService {
                         ELIEInvException: `E-Invoice issued successfully: ${data.statusMessage}`,
                         ELIEInvUpdatedOn: new Date().toISOString(),
                         EInvRefNum: orderNo,
-                        ELIEInvID: data.serialNo, // Use serialNo as E-Invoice ID
+                        ELIEInvID: data.digitInvoiceNo, // Use digitInvoiceNo as E-Invoice ID
                         RowMod: 'U'
                     });
 
@@ -647,7 +647,8 @@ export class InvoiceOperationService {
                         if (localInvoice) {
                             await this.invoiceRepository.update(localInvoice.id, {
                                 status: 'SUBMITTED',
-                                eInvoiceId: data.serialNo,
+                                eInvoiceId: data.digitInvoiceNo,
+                                serialNo: data.serialNo,
                                 orderNumber: orderNo,
                                 comment: `E-Invoice issued successfully: ${data.statusMessage}`,
                                 updatedAt: new Date(),
@@ -673,7 +674,7 @@ export class InvoiceOperationService {
                         data: {
                             erpInvoiceId,
                             status: 'SUBMITTED',
-                            eInvoiceId: data.serialNo,
+                            eInvoiceId: data.digitInvoiceNo,
                             orderNo,
                             warning: `Epicor update failed: ${updateError.message}`
                         }
@@ -686,7 +687,7 @@ export class InvoiceOperationService {
                     data: {
                         erpInvoiceId,
                         status: 'SUBMITTED',
-                        eInvoiceId: data.serialNo,
+                        eInvoiceId: data.digitInvoiceNo,
                         orderNo
                     }
                 };
@@ -906,7 +907,7 @@ export class InvoiceOperationService {
                                 ELIEInvException: `E-Invoice issued successfully for merged invoices: ${erpInvoiceIds.join(', ')}`,
                                 ELIEInvUpdatedOn: new Date().toISOString(),
                                 EInvRefNum: orderNo,
-                                ELIEInvID: data.serialNo, // Use serialNo as E-Invoice ID
+                                ELIEInvID: data.digitInvoiceNo, // Use digitInvoiceNo as E-Invoice ID
                                 RowMod: 'U'
                             });
 
@@ -932,10 +933,14 @@ export class InvoiceOperationService {
                                     if (localInvoice) {
                                         await this.invoiceRepository.update(localInvoice.id, {
                                             status: 'SUBMITTED',
-                                            eInvoiceId: data.serialNo,
+                                            eInvoiceId: data.digitInvoiceNo,
+                                            digitInvoiceNo: data.digitInvoiceNo,
                                             orderNumber: orderNo,
+                                            serialNo: data.serialNo,
                                             comment: `E-Invoice issued successfully for merged invoices: ${erpInvoiceIds.join(', ')}`,
                                             updatedAt: new Date(),
+                                            eInvoicePdf: data.pdfUrl, // PDF URL
+                                            eInvoiceDate: new Date(data.invoiceTime), // Invoice time as E-Invoice Date
                                         });
                                         this.logger.log(`Updated local cache status for invoice ${result.id} after successful Epicor update`);
                                     }
