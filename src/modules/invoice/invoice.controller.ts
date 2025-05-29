@@ -175,12 +175,13 @@ export class InvoiceController {
   @HttpCode(HttpStatus.OK)
   async submitInvoice(
     @Param('id') id: number,
-    @Body('submittedBy') submittedBy: string,
     @Req() request: RequestWithUser
   ) {
     // 从请求中获取租户ID和认证头
     const tenantId = request.user?.tenantId || request.user?.tenant?.id || 'default';
+    const submittedBy = request.user?.name || 'default';
     const authorization = request.headers.authorization;
+    console.log(JSON.stringify(request.user), 'request.user');
     this.logger.log(`Submitting invoice ${id} by ${submittedBy} for tenant ${tenantId}`);
 
     // Use the new operation service

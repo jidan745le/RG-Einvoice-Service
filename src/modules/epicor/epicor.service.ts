@@ -9,7 +9,7 @@ export interface EpicorTenantConfig {
   companyID: string;
   userAccount: string;
   password?: string; // Password might be optional if other auth methods are used, but for Basic it's needed
-  // apiKey?: string; // Consider if API key is also per-tenant
+  apiKey?: string; // Consider if API key is also per-tenant
 }
 
 @Injectable()
@@ -120,10 +120,10 @@ export class EpicorService {
       const headers = {
         'Accept': 'application/json',
         'Authorization': `Basic ${Buffer.from(`${epicorTenantConfig.userAccount}:${epicorTenantConfig.password || ''}`).toString('base64')}`,
-        'X-API-Key': "gBoukRpXcusuBo38fZqF5pje6KqbcXvC6kbeOfNsLOnUi",
+        'X-API-Key': epicorTenantConfig.apiKey,
       };
 
-      this.logger.log(`Requesting Epicor BAQ URL: ${url}`);
+      this.logger.log(`Requesting Epicor BAQ URL: ${url},headers:${JSON.stringify(headers)}`);
       const response = await lastValueFrom(
         this.httpService.get<EpicorResponse & { '@odata.count'?: number }>(url, { headers })
       );
@@ -159,7 +159,7 @@ export class EpicorService {
       const headers = {
         'Accept': 'application/json',
         'Authorization': `Basic ${Buffer.from(`${epicorTenantConfig.userAccount}:${epicorTenantConfig.password || ''}`).toString('base64')}`,
-        'X-API-Key': "gBoukRpXcusuBo38fZqF5pje6KqbcXvC6kbeOfNsLOnUi"
+        'X-API-Key': epicorTenantConfig.apiKey
       };
 
       this.logger.log(`Requesting Epicor invoice URL: ${url}`);
@@ -212,7 +212,7 @@ export class EpicorService {
       const headers = {
         'Accept': 'application/json',
         'Authorization': `Basic ${Buffer.from(`${epicorTenantConfig.userAccount}:${epicorTenantConfig.password || ''}`).toString('base64')}`,
-        'X-API-Key': "gBoukRpXcusuBo38fZqF5pje6KqbcXvC6kbeOfNsLOnUi"
+        'X-API-Key': epicorTenantConfig.apiKey
       };
 
       this.logger.log(`Updating Epicor invoice URL: ${url} with data: ${JSON.stringify(updateData)}`);

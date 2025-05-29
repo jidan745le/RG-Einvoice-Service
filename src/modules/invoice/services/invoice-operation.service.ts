@@ -26,6 +26,21 @@ export class InvoiceOperationService {
         private readonly authorizationCacheService: AuthorizationCacheService,
     ) { }
 
+    private generateEpicorTenantCompany(serverBaseAPI: string, companyID: string): string {
+        try {
+            // 从API地址中提取环境标识
+            // 例如: https://simalfa.kineticcloud.cn/simalfaprod/api/v1 -> simalfaprod
+            const url = new URL(serverBaseAPI);
+            const pathParts = url.pathname.split('/').filter(part => part.length > 0);
+            const environment = pathParts.find(part => part !== 'api' && part !== 'v1' && part !== 'v2') || 'default';
+
+            return `${environment}_${companyID}`;
+        } catch (error) {
+            this.logger.warn(`Error parsing server API URL ${serverBaseAPI}: ${error.message}`);
+            return `default_${companyID}`;
+        }
+    }
+
     /**
      * 提交发票到百望开票 - 操作服务
      * 1. 从Epicor获取实时发票数据
@@ -57,6 +72,13 @@ export class InvoiceOperationService {
             if (serverSettings.password === undefined) {
                 serverSettings.password = '';
             }
+
+            const company = appConfig?.settings?.serverSettings?.companyID;
+            const serverBaseAPI = appConfig?.settings?.serverSettings?.serverBaseAPI;
+            const epicorTenantCompany = this.generateEpicorTenantCompany(
+                serverBaseAPI,
+                company
+            );
 
             // 2. 直接从Epicor API获取发票实时数据
             this.logger.log(`Fetching real-time invoice data from Epicor for invoice ${id}`);
@@ -134,8 +156,10 @@ export class InvoiceOperationService {
             // 6. Update local cache status (if the invoice exists in cache)
             try {
                 const localInvoice = await this.invoiceRepository.findOne({
-                    where: { erpInvoiceId: id }
+                    where: { erpInvoiceId: id, epicorTenantCompany: epicorTenantCompany }
                 });
+
+                this.logger.log(`Local invoice: ${JSON.stringify(localInvoice)}`, id);
 
                 if (localInvoice) {
                     await this.invoiceRepository.update(localInvoice.id, {
