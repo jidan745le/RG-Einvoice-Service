@@ -303,15 +303,15 @@ export class InvoiceController {
     return this.invoiceCacheService.testGetAllTenantConfigs();
   }
 
-  /**
-   * 测试RPC连接到Customer Hub
-   * @returns RPC连接测试结果
-   */
-  @Get('/cache/test-rpc-connection')
-  @HttpCode(HttpStatus.OK)
-  async testRpcConnection(@Req() request: RequestWithUser) {
-    const tenantId = request.user?.tenantId || request.user?.tenant?.id;
-    this.logger.log(`Testing RPC connection for tenant: ${tenantId}`);
-    return this.invoiceService.testRpcConnection();
-  }
+  // /**
+  //  * 测试RPC连接到Customer Hub
+  //  * @returns RPC连接测试结果
+  //  */
+  // @Get('/cache/test-rpc-connection')
+  // @HttpCode(HttpStatus.OK)
+  // async testRpcConnection(@Req() request: RequestWithUser) {
+  //   const tenantId = request.user?.tenantId || request.user?.tenant?.id;
+  //   this.logger.log(`Testing RPC connection for tenant: ${tenantId}`);
+  //   return this.invoiceService.testRpcConnection();
+  // }
 }

@@ -221,7 +221,6 @@ export class EpicorService {
       );
 
       this.logger.log(`Updated invoice ${invoiceId} status in Epicor successfully`);
-
       return response.data;
     } catch (error) {
       this.logger.error(`Error updating invoice ${invoiceId} status in Epicor: ${error.message}`, error.stack);
