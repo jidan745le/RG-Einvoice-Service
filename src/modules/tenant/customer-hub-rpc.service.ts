@@ -93,7 +93,7 @@ export class CustomerHubRpcService implements OnModuleInit, OnModuleDestroy {
 
         if (this.rpcTransport.toUpperCase() === 'GRPC') {
             console.log('GRPC transport');
-            const isDevelopment = process.env.NODE_ENV !== 'production';
+            const isDevelopment = process.env.NODE_ENV == 'development';
             const defaultProtoPath = isDevelopment
                 ? './src/proto/customer-hub.proto'  // 开发环境：源码路径
                 : './proto/customer-hub.proto';     // 生产环境：容器内路径
