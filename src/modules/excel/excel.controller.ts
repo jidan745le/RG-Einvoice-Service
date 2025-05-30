@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Res } from '@nestjs/common';
+import { Controller, Post, Body, Res, Req } from '@nestjs/common';
 import { ExcelService } from './excel.service';
 import { Response } from 'express';
 import * as fs from 'fs';
@@ -8,9 +8,10 @@ export class ExcelController {
     constructor(private readonly excelService: ExcelService) { }
 
     @Post('export')
-    async exportInvoices(@Body() body: { epicorIds: string[] }, @Res() res: Response) {
+    async exportInvoices(@Body() body: { epicorIds: string[] }, @Req() req: any, @Res() res: Response) {
         try {
-            const filePath = await this.excelService.exportInvoices(body.epicorIds);
+            const tenantId = req?.user?.tenant?.id;
+            const filePath = await this.excelService.exportInvoices(body.epicorIds, tenantId);
 
             // Set response headers
             res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

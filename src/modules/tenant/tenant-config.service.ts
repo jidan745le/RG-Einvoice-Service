@@ -16,6 +16,10 @@ export class TenantConfigService {
         private readonly customerHubRpcService: CustomerHubRpcService,
     ) { }
 
+    async onModuleInit() {
+        console.log('onModuleInit TenantConfigService');
+    }
+
     /**
      * 从客户门户获取应用配置
      * @param tenantId 租户ID

@@ -391,7 +391,7 @@ export class InvoiceCacheService {
             .leftJoinAndSelect('invoice.invoiceDetails', 'details');
 
         if (epicorTenantCompany) {
-            queryBuilder.andWhere('invoice.epicorTenantCompany = :epicorTenantCompany', {
+            queryBuilder.andWhere('invoice.epicor_tenant_company = :epicorTenantCompany', {
                 epicorTenantCompany
             });
         }
@@ -490,7 +490,7 @@ export class InvoiceCacheService {
         const queryBuilder = this.invoiceRepository.createQueryBuilder('invoice');
 
         if (epicorTenantCompany) {
-            queryBuilder.andWhere('invoice.epicorTenantCompany = :epicorTenantCompany', {
+            queryBuilder.andWhere('invoice.epicor_tenant_company = :epicorTenantCompany', {
                 epicorTenantCompany
             });
         }

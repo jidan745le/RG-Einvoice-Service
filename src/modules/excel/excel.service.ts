@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { Workbook } from 'exceljs';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -6,23 +6,60 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Invoice } from '../invoice/entities/invoice.entity';
 import { InvoiceDetail } from '../invoice/entities/invoice-detail.entity';
+import { TenantConfigService } from '../tenant/tenant-config.service';
 
 @Injectable()
 export class ExcelService {
     private readonly EXCEL_TEMPLATE = 'templates/invoice_report_template.xlsx';
+    private readonly logger = new Logger(ExcelService.name);
 
     constructor(
         @InjectRepository(Invoice)
         private readonly invoiceRepository: Repository<Invoice>,
         @InjectRepository(InvoiceDetail)
         private readonly invoiceDetailRepository: Repository<InvoiceDetail>,
+        private readonly tenantConfigService: TenantConfigService,
+
     ) { }
 
-    async exportInvoices(epicorIds: string[]): Promise<string> {
+
+
+    /**
+    * 生成epicorTenantCompany标识
+    * @param serverBaseAPI Epicor API地址
+    * @param companyID 公司ID
+    */
+    private generateEpicorTenantCompany(serverBaseAPI: string, companyID: string): string {
+        try {
+            // 从API地址中提取环境标识
+            // 例如: https://simalfa.kineticcloud.cn/simalfaprod/api/v1 -> simalfaprod
+            const url = new URL(serverBaseAPI);
+            const pathParts = url.pathname.split('/').filter(part => part.length > 0);
+            const environment = pathParts.find(part => part !== 'api' && part !== 'v1' && part !== 'v2') || 'default';
+
+            return `${environment}_${companyID}`;
+        } catch (error) {
+            this.logger.warn(`Error parsing server API URL ${serverBaseAPI}: ${error.message}`);
+            return `default_${companyID}`;
+        }
+    }
+
+    async exportInvoices(epicorIds: string[], tenantId: string): Promise<string> {
         // Create output directory if it doesn't exist
         const outputDir = path.join(process.cwd(), 'temp');
         if (!fs.existsSync(outputDir)) {
             fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        let epicorTenantCompany = '';
+        if (tenantId) {
+            const appConfig = await this.tenantConfigService.getAppConfigByTenantId(tenantId, 'einvoice');
+            const company = appConfig?.settings?.serverSettings?.companyID;
+            const serverBaseAPI = appConfig?.settings?.serverSettings?.serverBaseAPI;
+            epicorTenantCompany = this.generateEpicorTenantCompany(
+                serverBaseAPI,
+                company
+            );
         }
 
         const outputFilePath = path.join(outputDir, `invoice_export_${Date.now()}.xlsx`);
@@ -41,6 +78,7 @@ export class ExcelService {
             .createQueryBuilder('invoice')
             .leftJoinAndSelect('invoice.invoiceDetails', 'details')
             .where('invoice.erp_invoice_id IN (:...ids)', { ids: epicorIds })
+            .andWhere('invoice.epicor_tenant_company = :epicorTenantCompany', { epicorTenantCompany })
             .getMany();
 
         let currentRow = 4;
