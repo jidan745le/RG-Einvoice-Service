@@ -189,6 +189,7 @@ export class InvoiceCacheService {
                 return { success: true, message: 'No new data', processed: 0, tenantId, epicorTenantCompany };
             }
 
+
             // 处理增量数据（只插入，不更新）
             const processedCount = await this.processIncrementalInvoices(epicorInvoices, epicorTenantCompany);
 
@@ -228,6 +229,17 @@ export class InvoiceCacheService {
 
         for (const epicorInvoice of epicorInvoices) {
             try {
+                // 过滤条件：DisplayBillAddr 以 "China" 结尾且 Posted 为 true
+                if (!epicorInvoice.DisplayBillAddr || !epicorInvoice.DisplayBillAddr.endsWith('China')) {
+                    this.logger.debug(`Invoice ${epicorInvoice.InvoiceNum} skipped: DisplayBillAddr does not end with 'China'`);
+                    continue;
+                }
+
+                if (epicorInvoice.Posted !== true) {
+                    this.logger.debug(`Invoice ${epicorInvoice.InvoiceNum} skipped: Posted is not true`);
+                    continue;
+                }
+
                 // 检查发票是否已存在（基于erpInvoiceId和epicorTenantCompany）
                 const existingInvoice = await this.invoiceRepository.findOne({
                     where: {
@@ -398,8 +410,8 @@ export class InvoiceCacheService {
 
         // 应用过滤条件
         if (filters.erpInvoiceId) {
-            queryBuilder.andWhere('invoice.erpInvoiceId = :erpInvoiceId', {
-                erpInvoiceId: filters.erpInvoiceId
+            queryBuilder.andWhere('CAST(invoice.erpInvoiceId AS VARCHAR) LIKE :erpInvoiceId', {
+                erpInvoiceId: `%${filters.erpInvoiceId}%`
             });
         }
 
@@ -497,8 +509,8 @@ export class InvoiceCacheService {
 
         // 应用相同的过滤条件（除了状态）
         if (filters.erpInvoiceId) {
-            queryBuilder.andWhere('invoice.erpInvoiceId = :erpInvoiceId', {
-                erpInvoiceId: filters.erpInvoiceId
+            queryBuilder.andWhere('CAST(invoice.erpInvoiceId AS VARCHAR) LIKE :erpInvoiceId', {
+                erpInvoiceId: `%${filters.erpInvoiceId}%`
             });
         }
 
