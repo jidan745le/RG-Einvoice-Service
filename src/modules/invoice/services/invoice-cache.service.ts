@@ -410,7 +410,7 @@ export class InvoiceCacheService {
 
         // 应用过滤条件
         if (filters.erpInvoiceId) {
-            queryBuilder.andWhere('CAST(invoice.erpInvoiceId AS VARCHAR) LIKE :erpInvoiceId', {
+            queryBuilder.andWhere('CAST(invoice.erpInvoiceId AS CHAR) LIKE :erpInvoiceId', {
                 erpInvoiceId: `%${filters.erpInvoiceId}%`
             });
         }
@@ -426,8 +426,8 @@ export class InvoiceCacheService {
         }
 
         if (filters.eInvoiceId) {
-            queryBuilder.andWhere('invoice.eInvoiceId = :eInvoiceId', {
-                eInvoiceId: filters.eInvoiceId
+            queryBuilder.andWhere('invoice.eInvoiceId LIKE :eInvoiceId', {
+                eInvoiceId: `%${filters.eInvoiceId}%`
             });
         }
 
@@ -509,7 +509,7 @@ export class InvoiceCacheService {
 
         // 应用相同的过滤条件（除了状态）
         if (filters.erpInvoiceId) {
-            queryBuilder.andWhere('CAST(invoice.erpInvoiceId AS VARCHAR) LIKE :erpInvoiceId', {
+            queryBuilder.andWhere('CAST(invoice.erpInvoiceId AS CHAR) LIKE :erpInvoiceId', {
                 erpInvoiceId: `%${filters.erpInvoiceId}%`
             });
         }
@@ -521,8 +521,8 @@ export class InvoiceCacheService {
         }
 
         if (filters.eInvoiceId) {
-            queryBuilder.andWhere('invoice.eInvoiceId = :eInvoiceId', {
-                eInvoiceId: filters.eInvoiceId
+            queryBuilder.andWhere('invoice.eInvoiceId LIKE :eInvoiceId', {
+                eInvoiceId: `%${filters.eInvoiceId}%`
             });
         }
 
