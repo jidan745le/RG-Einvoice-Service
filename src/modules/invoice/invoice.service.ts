@@ -35,6 +35,7 @@ export class InvoiceService {
     private readonly httpService: HttpService,
     private readonly authorizationCacheService: AuthorizationCacheService,
   ) {
+    this.logger.log('InvoiceService initialized');
   }
 
   /**
@@ -197,12 +198,33 @@ export class InvoiceService {
         invoice.customerName = epicorInvoice.CustomerName || '';
         invoice.invoiceAmount = parseFloat(epicorInvoice.DocInvoiceAmt || '0');
         invoice.invoiceComment = epicorInvoice.InvoiceComment || '';
-        invoice.status = epicorInvoice.ELIEInvStatus === 0 ? 'PENDING' : epicorInvoice.ELIEInvStatus === 1 ? 'SUBMITTED' : 'ERROR';
-        invoice.eInvoiceId = epicorInvoice.ELIEInvID || null;
-        invoice.hasPdf = !!epicorInvoice.ELIEInvID; // If there's an e-invoice ID, we assume there's a PDF
+
+        // 解析 ELIEInvException JSON 字段
+        let exceptionData = {
+          status: null,
+          serialNo: null,
+          EInvRefNum: null,
+          eInvoicePdf: null,
+          comment: null
+        };
+
+        if (epicorInvoice.ELIEInvException) {
+          try {
+            exceptionData = JSON.parse(epicorInvoice.ELIEInvException);
+          } catch (error) {
+            this.logger.warn(`Failed to parse ELIEInvException for invoice ${epicorInvoice.InvoiceNum}: ${error.message}`);
+          }
+        }
+
+        // 优先使用 JSON 中的数据，否则使用原字段作为备选
+        invoice.status = exceptionData.status ||
+          (epicorInvoice.ELIEInvStatus === 0 ? 'PENDING' :
+            epicorInvoice.ELIEInvStatus === 1 ? 'SUBMITTED' : 'ERROR');
+        invoice.eInvoiceId = exceptionData.serialNo || epicorInvoice.ELIEInvID || null;
+        invoice.hasPdf = !!(exceptionData.eInvoicePdf || epicorInvoice.ELIEInvID); // If there's an e-invoice ID, we assume there's a PDF
         invoice.eInvoiceDate = epicorInvoice.ELIEInvUpdatedOn ? new Date(epicorInvoice.ELIEInvUpdatedOn) : null;
         invoice.submittedBy = epicorInvoice.ELIEInvUpdatedBy || null;
-        invoice.comment = epicorInvoice.ELIEInvException || null;
+        invoice.comment = exceptionData.comment || epicorInvoice.ELIEInvException || null;
 
         // Additional fields needed for backend processing
         invoice.erpInvoiceId = epicorInvoice.InvoiceNum;
@@ -428,7 +450,11 @@ export class InvoiceService {
         ELIEInvoice: true,
         ELIEInvStatus: 0, // 0 = PENDING
         ELIEInvUpdatedBy: submittedBy,
-        ELIEInvException: '',
+        ELIEInvException: this.buildELIEInvExceptionJson({
+          status: 'PENDING',
+          EInvRefNum: orderNo,
+          comment: ''
+        }),
         ELIEInvUpdatedOn: new Date().toISOString(),
         EInvRefNum: orderNo,
         RowMod: 'U'
@@ -452,7 +478,10 @@ export class InvoiceService {
             ELIEInvoice: true,
             ELIEInvStatus: 2, // 2 = ERROR
             ELIEInvUpdatedBy: submittedBy,
-            ELIEInvException: `Error: ${error.message}`,
+            ELIEInvException: this.buildELIEInvExceptionJson({
+              status: 'ERROR',
+              comment: `Error: ${error.message}`
+            }),
             ELIEInvUpdatedOn: new Date().toISOString(),
             RowMod: 'U'
           });
@@ -590,7 +619,13 @@ export class InvoiceService {
             ELIEInvoice: true,
             ELIEInvStatus: 1, // 1 = SUBMITTED/SUCCESS
             ELIEInvUpdatedBy: data.drawer || 'system',
-            ELIEInvException: `E-Invoice issued successfully: ${data.statusMessage}`,
+            ELIEInvException: this.buildELIEInvExceptionJson({
+              status: 'SUBMITTED',
+              serialNo: data.serialNo,
+              EInvRefNum: orderNo,
+              eInvoicePdf: data.pdfUrl,
+              comment: `E-Invoice issued successfully: ${data.statusMessage}`
+            }),
             ELIEInvUpdatedOn: new Date().toISOString(),
             EInvRefNum: orderNo,
             ELIEInvID: data.serialNo, // Use serialNo as E-Invoice ID
@@ -676,7 +711,10 @@ export class InvoiceService {
                 ELIEInvoice: true,
                 ELIEInvStatus: 2, // 2 = ERROR
                 ELIEInvUpdatedBy: 'system',
-                ELIEInvException: `E-Invoice error: ${data.statusMessage}`,
+                ELIEInvException: this.buildELIEInvExceptionJson({
+                  status: 'ERROR',
+                  comment: `Error: ${data.statusMessage}`
+                }),
                 ELIEInvUpdatedOn: new Date().toISOString(),
                 EInvRefNum: data.orderNo,
                 RowMod: 'U'
@@ -814,12 +852,15 @@ export class InvoiceService {
             try {
               await this.epicorService.updateInvoiceStatus(serverSettings, id, {
                 ELIEInvoice: true,
-                ELIEInvStatus: 1, // 1 = SUBMITTED/SUCCESS
+                ELIEInvStatus: 0, // 0 = PENDING
                 ELIEInvUpdatedBy: data.drawer || 'system',
-                ELIEInvException: `E-Invoice issued successfully for merged invoices: ${erpInvoiceIds.join(', ')}`,
+                ELIEInvException: this.buildELIEInvExceptionJson({
+                  status: 'PENDING',
+                  EInvRefNum: orderNo,
+                  comment: `Merged with invoices: ${erpInvoiceIds.filter(i => i !== id).join(', ')}`
+                }),
                 ELIEInvUpdatedOn: new Date().toISOString(),
                 EInvRefNum: orderNo,
-                ELIEInvID: data.serialNo, // Use serialNo as E-Invoice ID
                 RowMod: 'U'
               });
 
@@ -905,7 +946,10 @@ export class InvoiceService {
                       ELIEInvoice: true,
                       ELIEInvStatus: 2, // 2 = ERROR
                       ELIEInvUpdatedBy: 'system',
-                      ELIEInvException: `Error in merged invoice: ${data.statusMessage}`,
+                      ELIEInvException: this.buildELIEInvExceptionJson({
+                        status: 'ERROR',
+                        comment: `Error in merged invoice: ${data.statusMessage}`
+                      }),
                       ELIEInvUpdatedOn: new Date().toISOString(),
                       EInvRefNum: orderNo,
                       RowMod: 'U'
@@ -1330,7 +1374,11 @@ export class InvoiceService {
             ELIEInvoice: true,
             ELIEInvStatus: 0, // 0 = PENDING
             ELIEInvUpdatedBy: submittedBy,
-            ELIEInvException: `Merged with invoices: ${erpInvoiceIds.filter(id => id !== invoice.InvoiceNum).join(', ')}`,
+            ELIEInvException: this.buildELIEInvExceptionJson({
+              status: 'PENDING',
+              EInvRefNum: orderNo,
+              comment: `Merged with invoices: ${erpInvoiceIds.filter(id => id !== invoice.InvoiceNum).join(', ')}`
+            }),
             ELIEInvUpdatedOn: new Date().toISOString(),
             EInvRefNum: orderNo,
             RowMod: 'U'
@@ -1564,7 +1612,7 @@ export class InvoiceService {
       // Get the customer portal URL from the configuration service
       const customerPortalUrl = this.configService.get<string>(
         'CUSTOMER_PORTAL_URL',
-        'http://localhost:3000'
+        'http://127.0.0.1:3000'
       );
 
       if (!authorization) {
@@ -1632,7 +1680,7 @@ export class InvoiceService {
       // Get the customer portal URL from the configuration service
       const customerPortalUrl = this.configService.get<string>(
         'CUSTOMER_PORTAL_URL',
-        'http://localhost:3000'
+        'http://127.0.0.1:3000'
       );
 
       if (!authorization) {
@@ -1743,5 +1791,25 @@ export class InvoiceService {
       testResults: results,
       cacheStats: this.getAuthorizationCacheStats()
     };
+  }
+
+  /**
+   * 构建 ELIEInvException JSON 数据
+   * @param data JSON 数据对象
+   * @returns JSON 字符串
+   */
+  private buildELIEInvExceptionJson(data: {
+    status?: string;
+    serialNo?: string;
+    EInvRefNum?: string;
+    eInvoicePdf?: string;
+    comment?: string;
+  }): string {
+    try {
+      return JSON.stringify(data);
+    } catch (error) {
+      this.logger.warn(`Error building ELIEInvException JSON: ${error.message}`);
+      return JSON.stringify({ comment: data.comment || 'Error building JSON data' });
+    }
   }
 }

@@ -32,7 +32,7 @@ export class TenantConfigService {
         try {
             const customerPortalUrl = this.configService.get<string>(
                 'CUSTOMER_PORTAL_URL',
-                'http://localhost:3000'
+                'http://127.0.0.1:3000'
             );
 
             // 检查是否提供了认证信息
@@ -200,7 +200,7 @@ export class TenantConfigService {
         try {
             const customerPortalUrl = this.configService.get<string>(
                 'CUSTOMER_PORTAL_URL',
-                'http://localhost:3000'
+                'http://127.0.0.1:3000'
             );
 
             const response = await lastValueFrom(

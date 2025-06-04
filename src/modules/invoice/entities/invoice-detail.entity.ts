@@ -31,7 +31,7 @@ export class InvoiceDetail {
   @Column({ name: 'selling_ship_qty', type: 'decimal', precision: 13, scale: 8, nullable: true })
   sellingShipQty: number;
 
-  @Column({ name: 'doc_unit_price', type: 'decimal', precision: 10, scale: 5, nullable: true })
+  @Column({ name: 'doc_unit_price', type: 'decimal', precision: 15, scale: 6, nullable: true })
   docUnitPrice: number;
 
   @Column({ name: 'doc_ext_price', type: 'decimal', precision: 10, scale: 3, nullable: true })

@@ -175,7 +175,7 @@ export class InvoiceCacheService {
                 {
                     filter: odataFilter,
                     top: 1000, // 限制单次同步数量
-                    select: 'InvoiceNum,Description,CNTaxInvoiceType,InvoiceComment,ELIEInvStatus,ELIEInvID,ELIEInvUpdatedBy,ELIEInvUpdatedOn,PONum,OrderNum,InvoiceDate,CustomerName',
+                    select: 'InvoiceNum,Description,CNTaxInvoiceType,InvoiceComment,ELIEInvStatus,ELIEInvID,ELIEInvUpdatedBy,ELIEInvUpdatedOn,ELIEInvException,PONum,OrderNum,InvoiceDate,CustomerName,DisplayBillAddr,Posted',
                     expand: 'InvcDtls($select=InvoiceNum,LineDesc,CommodityCode,SalesUM,SellingShipQty,DocUnitPrice,DocExtPrice;$expand=InvcTaxes($select=Percent))',
                     orderBy: 'CreatedOn desc',
                     // count: true
@@ -274,24 +274,47 @@ export class InvoiceCacheService {
             totalAmount = epicorInvoice.InvcDtls.reduce((sum, detail) => sum + (detail.DocExtPrice || 0), 0);
         }
 
+        // 解析 ELIEInvException JSON 字段
+        let exceptionData = {
+            status: null,
+            serialNo: null,
+            EInvRefNum: null,
+            eInvoicePdf: null,
+            comment: null
+        };
+
+        if (epicorInvoice.ELIEInvException) {
+            try {
+                exceptionData = JSON.parse(epicorInvoice.ELIEInvException);
+            } catch (error) {
+                this.logger.warn(`Failed to parse ELIEInvException for invoice ${epicorInvoice.InvoiceNum}: ${error.message}`);
+            }
+        }
+
+        // 优先使用 JSON 中的数据，否则使用原字段作为备选
+        const status = exceptionData.status ||
+            (epicorInvoice.ELIEInvStatus === 0 ? 'PENDING' :
+                epicorInvoice.ELIEInvStatus === 1 ? 'SUBMITTED' : 'ERROR');
+
         const invoice = this.invoiceRepository.create({
             erpInvoiceId: epicorInvoice.InvoiceNum.toString(),
             erpInvoiceDescription: epicorInvoice.Description || '',
             fapiaoType: epicorInvoice.CNTaxInvoiceType?.toString() || '',
-            customerName: epicorInvoice.CustomerName || '', // 注意：JSON中似乎没有这个字段
-            customerResaleId: epicorInvoice.CustomerResaleID || '', // 注意：JSON中似乎没有这个字段
+            customerName: epicorInvoice.CustomerName || '',
+            customerResaleId: epicorInvoice.CustomerResaleID || '',
             invoiceComment: epicorInvoice.InvoiceComment || '',
-            orderNumber: epicorInvoice.OrderNum?.toString() || '',
-            orderDate: epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : null, // 注意：JSON中似乎没有这个字段
+            orderNumber: exceptionData.EInvRefNum || epicorInvoice.OrderNum?.toString() || '',
+            orderDate: epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : null,
             postDate: epicorInvoice.InvoiceDate ? new Date(epicorInvoice.InvoiceDate) : null,
             poNumber: epicorInvoice.PONum?.toString() || '',
             invoiceAmount: totalAmount,
-            status: epicorInvoice.ELIEInvStatus === 0 ? 'PENDING' :
-                epicorInvoice.ELIEInvStatus === 1 ? 'SUBMITTED' : 'ERROR',
+            status: status,
+            serialNo: exceptionData.serialNo || null,
             eInvoiceId: epicorInvoice.ELIEInvID || null,
             submittedBy: epicorInvoice.ELIEInvUpdatedBy || null,
-            eInvoiceDate: epicorInvoice.ELIEInvUpdatedOn ? new Date(epicorInvoice.ELIEInvUpdatedOn) : null,
-            hasPdf: !!epicorInvoice.ELIEInvID,
+            eInvoiceDate: epicorInvoice.ELIEInvoice ? (epicorInvoice.ELIEInvUpdatedOn ? new Date(epicorInvoice.ELIEInvUpdatedOn) : null) : null,
+            hasPdf: !!(exceptionData.eInvoicePdf || epicorInvoice.ELIEInvID),
+            comment: exceptionData.comment || null,
             epicorTenantCompany,
         });
 

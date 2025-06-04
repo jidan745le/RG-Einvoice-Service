@@ -9,7 +9,7 @@ import { TenantConfigService } from '../../tenant/tenant-config.service';
 import { EpicorTenantConfig } from '../../epicor/epicor.service';
 import { AuthorizationCacheService } from '../authorization-cache.service';
 import { v4 as uuidv4 } from 'uuid';
-import { EpicorInvoiceHeader } from '../../epicor/interfaces/epicor.interface';
+import { ELIEInvoiceResetOptions, ELIEInvoiceResetResult, EpicorInvoiceHeader } from '../../epicor/interfaces/epicor.interface';
 
 @Injectable()
 export class InvoiceOperationService {
@@ -38,6 +38,35 @@ export class InvoiceOperationService {
         } catch (error) {
             this.logger.warn(`Error parsing server API URL ${serverBaseAPI}: ${error.message}`);
             return `default_${companyID}`;
+        }
+    }
+
+    async batchResetELIEInvoiceFields(
+        tenantId: string | undefined,
+        authorization?: string
+    ): Promise<ELIEInvoiceResetResult> {
+        const appConfig = await this.tenantConfigService.getAppConfig(tenantId as string, 'einvoice', authorization);
+        const serverSettings = appConfig?.settings?.serverSettings as EpicorTenantConfig;
+        return this.epicorService.batchResetELIEInvoiceFields(serverSettings);
+    }
+
+    /**
+     * 构建 ELIEInvException JSON 数据
+     * @param data JSON 数据对象
+     * @returns JSON 字符串
+     */
+    private buildELIEInvExceptionJson(data: {
+        status?: string;
+        serialNo?: string;
+        EInvRefNum?: string;
+        eInvoicePdf?: string;
+        comment?: string;
+    }): string {
+        try {
+            return JSON.stringify(data);
+        } catch (error) {
+            this.logger.warn(`Error building ELIEInvException JSON: ${error.message}`);
+            return JSON.stringify({ comment: data.comment || 'Error building JSON data' });
         }
     }
 
@@ -160,15 +189,15 @@ export class InvoiceOperationService {
                 });
 
                 this.logger.log(`Local invoice: ${JSON.stringify(localInvoice)}`, id);
-
-                if (localInvoice) {
-                    await this.invoiceRepository.update(localInvoice.id, {
-                        status: 'PENDING',
-                        submittedBy,
-                        updatedAt: new Date(),
-                    });
-                    this.logger.log(`Updated local cache status for invoice ${id}`);
-                }
+                //不要处理 回调再处理
+                // if (localInvoice) {
+                //     await this.invoiceRepository.update(localInvoice.id, {
+                //         status: 'PENDING',
+                //         submittedBy,
+                //         updatedAt: new Date(),
+                //     });
+                //     this.logger.log(`Updated local cache status for invoice ${id}`);
+                // }
             } catch (cacheError) {
                 this.logger.warn(`Failed to update local cache for invoice ${id}: ${cacheError.message}`);
                 // Don't fail the operation if cache update fails
@@ -197,9 +226,11 @@ export class InvoiceOperationService {
                 if (serverSettings) {
                     await this.epicorService.updateInvoiceStatus(serverSettings, id, {
                         ELIEInvoice: true,
-                        ELIEInvStatus: 2, // 2 = ERROR
                         ELIEInvUpdatedBy: submittedBy,
-                        ELIEInvException: `Error: ${error.message}`,
+                        ELIEInvException: this.buildELIEInvExceptionJson({
+                            status: 'ERROR',
+                            comment: `Error: ${error.message}`
+                        }),
                         ELIEInvUpdatedOn: new Date().toISOString(),
                         RowMod: 'U'
                     });
@@ -364,46 +395,50 @@ export class InvoiceOperationService {
             const result = await this.baiwangService.submitInvoice(baiwangRequest);
 
             // 并行更新所有发票状态在Epicor中
-            const updatePromises = validInvoices.map(invoice =>
-                this.epicorService.updateInvoiceStatus(serverSettings, invoice.InvoiceNum, {
-                    ELIEInvoice: true,
-                    ELIEInvStatus: 0, // 0 = PENDING
-                    ELIEInvUpdatedBy: submittedBy,
-                    ELIEInvException: `Merged with invoices: ${erpInvoiceIds.filter(id => id !== invoice.InvoiceNum).join(', ')}`,
-                    ELIEInvUpdatedOn: new Date().toISOString(),
-                    EInvRefNum: orderNo,
-                    RowMod: 'U'
-                }).catch(error => {
-                    this.logger.error(`Could not update invoice ${invoice.InvoiceNum} status in Epicor: ${error.message}`);
-                    return null;
-                })
-            );
+            // const updatePromises = validInvoices.map(invoice =>
+            //     this.epicorService.updateInvoiceStatus(serverSettings, invoice.InvoiceNum, {
+            //         ELIEInvoice: true,
+            //         ELIEInvStatus: 0, // 0 = PENDING
+            //         ELIEInvUpdatedBy: submittedBy,
+            //         ELIEInvException: this.buildELIEInvExceptionJson({
+            //             status: 'PENDING',
+            //             EInvRefNum: orderNo,
+            //             comment: `Merged with invoices: ${erpInvoiceIds.filter(id => id !== invoice.InvoiceNum).join(', ')}`
+            //         }),
+            //         ELIEInvUpdatedOn: new Date().toISOString(),
+            //         EInvRefNum: orderNo,
+            //         RowMod: 'U'
+            //     }).catch(error => {
+            //         this.logger.error(`Could not update invoice ${invoice.InvoiceNum} status in Epicor: ${error.message}`);
+            //         return null;
+            //     })
+            // );
 
             // 并行更新本地缓存状态
-            const localUpdatePromises = erpInvoiceIds.map(async (id) => {
-                try {
-                    const localInvoice = await this.invoiceRepository.findOne({
-                        where: { erpInvoiceId: id }
-                    });
+            // const localUpdatePromises = erpInvoiceIds.map(async (id) => {
+            //     try {
+            //         const localInvoice = await this.invoiceRepository.findOne({
+            //             where: { erpInvoiceId: id }
+            //         });
 
-                    if (localInvoice) {
-                        await this.invoiceRepository.update(localInvoice.id, {
-                            status: 'PENDING',
-                            submittedBy,
-                            orderNumber: orderNo,
-                            comment: `Merged with invoices: ${erpInvoiceIds.filter(otherId => otherId !== id).join(', ')}`,
-                            updatedAt: new Date(),
-                        });
-                    }
-                } catch (error) {
-                    this.logger.warn(`Failed to update local cache for invoice ${id}: ${error.message}`);
-                }
-            });
+            //         if (localInvoice) {
+            //             await this.invoiceRepository.update(localInvoice.id, {
+            //                 status: 'PENDING',
+            //                 submittedBy,
+            //                 orderNumber: orderNo,
+            //                 comment: `Merged with invoices: ${erpInvoiceIds.filter(otherId => otherId !== id).join(', ')}`,
+            //                 updatedAt: new Date(),
+            //             });
+            //         }
+            //     } catch (error) {
+            //         this.logger.warn(`Failed to update local cache for invoice ${id}: ${error.message}`);
+            //     }
+            // });
 
-            // 等待所有更新完成
-            await Promise.all([...updatePromises, ...localUpdatePromises]);
+            // // 等待所有更新完成
+            // await Promise.all([...updatePromises, ...localUpdatePromises]);
 
-            this.logger.log(`Successfully merged and submitted ${erpInvoiceIds.length} invoices with orderNo: ${orderNo}`);
+            // this.logger.log(`Successfully merged and submitted ${erpInvoiceIds.length} invoices with orderNo: ${orderNo}`);
 
             return {
                 success: true,
@@ -627,11 +662,16 @@ export class InvoiceOperationService {
                     // Update invoice with e-invoice information in Epicor FIRST
                     await this.epicorService.updateInvoiceStatus(serverSettings, erpInvoiceId, {
                         ELIEInvoice: true,
-                        ELIEInvStatus: 1, // 1 = SUBMITTED/SUCCESS
+                        // ELIEInvStatus: 1, // 1 = SUBMITTED/SUCCESS
                         ELIEInvUpdatedBy: data.drawer || 'system',
-                        ELIEInvException: `E-Invoice issued successfully: ${data.statusMessage}`,
-                        ELIEInvUpdatedOn: new Date().toISOString(),
-                        EInvRefNum: orderNo,
+                        ELIEInvException: this.buildELIEInvExceptionJson({
+                            status: 'SUBMITTED',
+                            serialNo: data.serialNo,
+                            EInvRefNum: orderNo,
+                            eInvoicePdf: data.pdfUrl,
+                            comment: `E-Invoice issued successfully: ${data.statusMessage}`
+                        }),
+                        ELIEInvUpdatedOn: data.invoiceTime ? new Date(data.invoiceTime).toISOString() : new Date().toISOString(),
                         ELIEInvID: data.digitInvoiceNo, // Use digitInvoiceNo as E-Invoice ID
                         RowMod: 'U'
                     });
@@ -743,9 +783,12 @@ export class InvoiceOperationService {
                                 ELIEInvoice: true,
                                 ELIEInvStatus: 2, // 2 = ERROR
                                 ELIEInvUpdatedBy: 'system',
-                                ELIEInvException: `E-Invoice error: ${data.statusMessage}`,
+                                ELIEInvException: this.buildELIEInvExceptionJson({
+                                    status: 'ERROR',
+                                    comment: `E-Invoice error: ${data.statusMessage}`,
+                                    EInvRefNum: data.orderNo,
+                                }),
                                 ELIEInvUpdatedOn: new Date().toISOString(),
-                                EInvRefNum: data.orderNo,
                                 RowMod: 'U'
                             });
 
@@ -902,11 +945,15 @@ export class InvoiceOperationService {
                         try {
                             await this.epicorService.updateInvoiceStatus(serverSettings, id, {
                                 ELIEInvoice: true,
-                                ELIEInvStatus: 1, // 1 = SUBMITTED/SUCCESS
                                 ELIEInvUpdatedBy: data.drawer || 'system',
-                                ELIEInvException: `E-Invoice issued successfully for merged invoices: ${erpInvoiceIds.join(', ')}`,
-                                ELIEInvUpdatedOn: new Date().toISOString(),
-                                EInvRefNum: orderNo,
+                                ELIEInvException: this.buildELIEInvExceptionJson({
+                                    status: 'SUBMITTED',
+                                    serialNo: data.serialNo,
+                                    EInvRefNum: orderNo,
+                                    eInvoicePdf: data.pdfUrl,
+                                    comment: `E-Invoice issued successfully for merged invoices: ${erpInvoiceIds.join(', ')}`,
+                                }),
+                                ELIEInvUpdatedOn: data.invoiceTime ? new Date(data.invoiceTime).toISOString() : new Date().toISOString(),
                                 ELIEInvID: data.digitInvoiceNo, // Use digitInvoiceNo as E-Invoice ID
                                 RowMod: 'U'
                             });
@@ -1030,11 +1077,13 @@ export class InvoiceOperationService {
                                     try {
                                         await this.epicorService.updateInvoiceStatus(serverSettings, id, {
                                             ELIEInvoice: true,
-                                            ELIEInvStatus: 2, // 2 = ERROR
                                             ELIEInvUpdatedBy: 'system',
-                                            ELIEInvException: `Error in merged invoice: ${data.statusMessage}`,
+                                            ELIEInvException: this.buildELIEInvExceptionJson({
+                                                status: 'ERROR',
+                                                comment: `Error in merged invoice: ${data.statusMessage}`,
+                                                EInvRefNum: orderNo,
+                                            }),
                                             ELIEInvUpdatedOn: new Date().toISOString(),
-                                            EInvRefNum: orderNo,
                                             RowMod: 'U'
                                         });
                                         this.logger.log(`Successfully updated invoice ${id} with error status in Epicor via callback`);

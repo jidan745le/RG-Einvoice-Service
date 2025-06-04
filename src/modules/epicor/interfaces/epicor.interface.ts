@@ -89,4 +89,31 @@ export interface EpicorResponse {
 export interface EpicorNewResponse {
   'odata.metadata': string;
   value: EpicorInvoiceHeader[];
+}
+
+// 清理ELIEInvoice字段相关接口
+export interface ELIEInvoiceResetData {
+  ELIEInvoice?: boolean;
+  ELIEInvStatus?: number | null;
+  ELIEInvUpdatedBy?: string | null;
+  ELIEInvException?: string | null;
+  ELIEInvUpdatedOn?: string | null;
+  EInvRefNum?: string | null;
+  ELIEInvID?: string | null;
+  RowMod: 'U';
+}
+
+export interface ELIEInvoiceResetOptions {
+  batchSize?: number;
+  filter?: string; // 自定义过滤条件，默认为 "ELIEInvUpdatedBy ne ''"
+}
+
+export interface ELIEInvoiceResetResult {
+  totalProcessed: number;
+  successCount: number;
+  failureCount: number;
+  errors: Array<{
+    invoiceNum: number;
+    error: string;
+  }>;
 } 

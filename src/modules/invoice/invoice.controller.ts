@@ -24,6 +24,7 @@ import { RedInvoiceRequestDto } from './dto/red-invoice.dto';
 import { Public } from '../auth/decorators/public.decorator';
 import { MergeInvoicesDto } from './dto/merge-invoices.dto';
 import { Request } from 'express';
+import { EpicorService } from '../epicor/epicor.service';
 
 // 扩展 Request 类型以包含 user 属性
 interface RequestWithUser extends Request {
@@ -46,6 +47,7 @@ export class InvoiceController {
     private readonly invoiceQueryService: InvoiceQueryService, // New caching query service
     private readonly invoiceOperationService: InvoiceOperationService, // New operations service
     private readonly invoiceCacheService: InvoiceCacheService, // Cache service for direct access
+    private readonly epicorService: EpicorService, // Epicor service for direct access
   ) { }
 
   @Post()
@@ -317,4 +319,14 @@ export class InvoiceController {
   //   this.logger.log(`Testing RPC connection for tenant: ${tenantId}`);
   //   return this.invoiceService.testRpcConnection();
   // }
+
+  @Post('/epicor/batchResetELIEInvoiceFields')
+  @HttpCode(HttpStatus.OK)
+  async batchResetELIEInvoiceFields(@Body() body: any, @Req() request: RequestWithUser) {
+    const tenantId = request.user?.tenantId || request.user?.tenant?.id || 'default';
+    const submittedBy = request.user?.name || 'default';
+    const authorization = request.headers.authorization;
+    console.log(JSON.stringify(request.user), 'request.user', authorization);
+    return this.invoiceOperationService.batchResetELIEInvoiceFields(tenantId, authorization);
+  }
 }
