@@ -695,7 +695,7 @@ export class InvoiceOperationService {
                                 eInvoicePdf: data.pdfUrl, // PDF URL
                                 digitInvoiceNo: data.digitInvoiceNo,
                                 eInvoiceDate: new Date(data.invoiceTime), // Invoice time as E-Invoice Date
-
+                                submittedBy: data.drawer || 'system',
                             });
                             this.logger.log(`Updated local cache status for invoice ${erpInvoiceId} after successful Epicor update`);
                         }
@@ -988,6 +988,7 @@ export class InvoiceOperationService {
                                             updatedAt: new Date(),
                                             eInvoicePdf: data.pdfUrl, // PDF URL
                                             eInvoiceDate: new Date(data.invoiceTime), // Invoice time as E-Invoice Date
+                                            submittedBy: data.drawer || 'system',
                                         });
                                         this.logger.log(`Updated local cache status for invoice ${result.id} after successful Epicor update`);
                                     }
