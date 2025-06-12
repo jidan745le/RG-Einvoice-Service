@@ -9,6 +9,7 @@ import { TenantConfigService } from '../../tenant/tenant-config.service';
 import { EpicorTenantConfig } from '../../epicor/epicor.service';
 import { EpicorInvoice, EpicorResponse } from '../../epicor/interfaces/epicor.interface';
 import { QueryInvoiceDto } from '../dto/query-invoice.dto';
+import { AuthorizationCacheService } from '../authorization-cache.service';
 
 interface TenantEpicorConfig {
     tenantId: string;
@@ -27,6 +28,7 @@ export class InvoiceCacheService {
         private readonly invoiceDetailRepository: Repository<InvoiceDetail>,
         private readonly epicorService: EpicorService,
         private readonly tenantConfigService: TenantConfigService,
+        private readonly authorizationCacheService: AuthorizationCacheService,
     ) { }
 
     /**
@@ -163,7 +165,9 @@ export class InvoiceCacheService {
             // 构建增量查询过滤器
             const filterClauses: string[] = [];
             if (lastSync) {
-                const formattedDate = lastSync.toISOString();
+                // 将UTC时间转换为中国时区时间 (UTC+8)，并格式化为指定格式
+                const chinaTime = new Date(lastSync.getTime() + 8 * 60 * 60 * 1000);
+                const formattedDate = chinaTime.toISOString();
                 filterClauses.push(`CreatedOn ge ${formattedDate}`);
             }
 
@@ -175,7 +179,7 @@ export class InvoiceCacheService {
                 {
                     filter: odataFilter,
                     top: 1000, // 限制单次同步数量
-                    select: 'InvoiceNum,Description,CNTaxInvoiceType,InvoiceComment,ELIEInvStatus,ELIEInvID,ELIEInvUpdatedBy,ELIEInvUpdatedOn,ELIEInvException,PONum,OrderNum,InvoiceDate,CustomerName,DisplayBillAddr,Posted',
+                    select: 'InvoiceNum,Description,CNTaxInvoiceType,InvoiceComment,ELIEInvStatus,ELIEInvID,ELIEInvUpdatedBy,ELIEInvUpdatedOn,ELIEInvException,PONum,OrderNum,InvoiceDate,CustomerName,DisplayBillAddr,Posted,TranDocTypeID',
                     expand: 'InvcDtls($select=InvoiceNum,LineDesc,CommodityCode,SalesUM,SellingShipQty,DocUnitPrice,DocExtPrice;$expand=InvcTaxes($select=Percent))',
                     orderBy: 'CreatedOn desc',
                     // count: true
@@ -192,6 +196,9 @@ export class InvoiceCacheService {
 
             // 处理增量数据（只插入，不更新）
             const processedCount = await this.processIncrementalInvoices(epicorInvoices, epicorTenantCompany);
+
+            // 检查之前缓存的pending invoices状态
+            await this.checkPendingInvoicesStatus(epicorTenantCompany, serverSettings);
 
             this.logger.log(`Incremental sync completed for tenant ${tenantId} (${epicorTenantCompany}). Processed ${processedCount} invoices`);
 
@@ -235,8 +242,22 @@ export class InvoiceCacheService {
                     continue;
                 }
 
+                if (epicorInvoice.TranDocTypeID?.includes("Credit Memos")) {
+                    //这是红票 忽略
+                    this.logger.debug(`skiped`)
+                    continue;
+                }
+
                 if (epicorInvoice.Posted !== true) {
-                    this.logger.debug(`Invoice ${epicorInvoice.InvoiceNum} skipped: Posted is not true`);
+                    // Posted为false的发票，保存到缓存中
+                    this.authorizationCacheService.storePendingInvoice(
+                        epicorInvoice.InvoiceNum.toString(),
+                        epicorTenantCompany,
+                        epicorInvoice.CustomerName || '',
+                        epicorInvoice.DisplayBillAddr || '',
+                        epicorInvoice.CreatedOn ? new Date(epicorInvoice.CreatedOn) : new Date()
+                    );
+                    this.logger.debug(`Invoice ${epicorInvoice.InvoiceNum} stored in pending cache: Posted is not true`);
                     continue;
                 }
 
@@ -721,6 +742,87 @@ export class InvoiceCacheService {
                 success: false,
                 error: error.message
             };
+        }
+    }
+
+    /**
+     * 检查之前缓存的pending invoices，看是否变为Posted=true
+     */
+    private async checkPendingInvoicesStatus(epicorTenantCompany: string, serverSettings: any): Promise<void> {
+        try {
+            // 获取该租户的所有pending invoices
+            const pendingInvoices = this.authorizationCacheService.getPendingInvoicesForTenant(epicorTenantCompany);
+
+            if (pendingInvoices.length === 0) {
+                return;
+            }
+
+            this.logger.log(`Checking ${pendingInvoices.length} pending invoices for ${epicorTenantCompany}`);
+
+            // 检查每个pending invoice的状态
+            for (const pendingInvoice of pendingInvoices) {
+                try {
+                    // 查询单个发票的当前状态
+                    const epicorData = await this.epicorService.fetchAllInvoicesFromBaq(
+                        serverSettings,
+                        {
+                            filter: `InvoiceNum eq ${pendingInvoice.invoiceNum}`,
+                            top: 1,
+                            select: 'InvoiceNum,Description,CNTaxInvoiceType,InvoiceComment,ELIEInvStatus,ELIEInvID,ELIEInvUpdatedBy,ELIEInvUpdatedOn,ELIEInvException,PONum,OrderNum,InvoiceDate,CustomerName,DisplayBillAddr,Posted,CreatedOn',
+                            expand: 'InvcDtls($select=InvoiceNum,LineDesc,CommodityCode,SalesUM,SellingShipQty,DocUnitPrice,DocExtPrice;$expand=InvcTaxes($select=Percent))',
+                        }
+                    ) as EpicorResponse;
+
+                    const epicorInvoices = epicorData.value || [];
+
+                    if (epicorInvoices.length > 0) {
+                        const epicorInvoice = epicorInvoices[0] as any; // Use any type for BAQ response
+
+                        if (epicorInvoice.Posted === true) {
+                            // Posted状态变为true，创建发票并从缓存中移除
+                            this.logger.log(`Pending invoice ${pendingInvoice.invoiceNum} is now Posted=true, creating invoice`);
+
+                            // 检查是否已存在（避免重复插入）
+                            const existingInvoice = await this.invoiceRepository.findOne({
+                                where: {
+                                    erpInvoiceId: epicorInvoice.InvoiceNum.toString(),
+                                    epicorTenantCompany
+                                }
+                            });
+
+                            if (!existingInvoice) {
+                                await this.createNewInvoiceFromEpicor(epicorInvoice, epicorTenantCompany);
+                                this.logger.log(`Created invoice ${epicorInvoice.InvoiceNum} from pending cache`);
+                            }
+
+                            // 从缓存中移除
+                            this.authorizationCacheService.removePendingInvoice(
+                                pendingInvoice.invoiceNum,
+                                epicorTenantCompany
+                            );
+                        } else {
+                            // 仍然是false，更新最后检查时间
+                            this.authorizationCacheService.updatePendingInvoiceLastChecked(
+                                pendingInvoice.invoiceNum,
+                                epicorTenantCompany
+                            );
+                        }
+                    } else {
+                        this.logger.warn(`Pending invoice ${pendingInvoice.invoiceNum} not found in Epicor, may have been deleted`);
+                        // 从缓存中移除不存在的发票
+                        this.authorizationCacheService.removePendingInvoice(
+                            pendingInvoice.invoiceNum,
+                            epicorTenantCompany
+                        );
+                    }
+
+                } catch (error) {
+                    this.logger.error(`Error checking pending invoice ${pendingInvoice.invoiceNum}: ${error.message}`);
+                }
+            }
+
+        } catch (error) {
+            this.logger.error(`Error checking pending invoices status for ${epicorTenantCompany}: ${error.message}`);
         }
     }
 } 

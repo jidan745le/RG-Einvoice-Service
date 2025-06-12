@@ -25,6 +25,7 @@ import { Public } from '../auth/decorators/public.decorator';
 import { MergeInvoicesDto } from './dto/merge-invoices.dto';
 import { Request } from 'express';
 import { EpicorService } from '../epicor/epicor.service';
+import { AuthorizationCacheService, PendingInvoiceData } from './authorization-cache.service';
 
 // 扩展 Request 类型以包含 user 属性
 interface RequestWithUser extends Request {
@@ -48,6 +49,7 @@ export class InvoiceController {
     private readonly invoiceOperationService: InvoiceOperationService, // New operations service
     private readonly invoiceCacheService: InvoiceCacheService, // Cache service for direct access
     private readonly epicorService: EpicorService, // Epicor service for direct access
+    private readonly authorizationCacheService: AuthorizationCacheService, // Authorization cache service
   ) { }
 
   @Post()
@@ -281,7 +283,13 @@ export class InvoiceController {
   @HttpCode(HttpStatus.OK)
   async getCacheStats() {
     this.logger.log('Getting cache statistics');
-    return this.invoiceQueryService.getCacheStats();
+    const cacheStats = await this.invoiceQueryService.getCacheStats();
+    const pendingStats = this.authorizationCacheService.getPendingInvoicesCacheStats();
+
+    return {
+      ...cacheStats,
+      pendingInvoices: pendingStats
+    };
   }
 
   /**
@@ -328,5 +336,38 @@ export class InvoiceController {
     const authorization = request.headers.authorization;
     console.log(JSON.stringify(request.user), 'request.user', authorization);
     return this.invoiceOperationService.batchResetELIEInvoiceFields(tenantId, authorization);
+  }
+
+  /**
+   * 获取pending invoices缓存统计
+   * @returns Pending invoices统计
+   */
+  @Get('/cache/pending-stats')
+  @HttpCode(HttpStatus.OK)
+  async getPendingInvoicesStats() {
+    this.logger.log('Getting pending invoices cache statistics');
+    return this.authorizationCacheService.getPendingInvoicesCacheStats();
+  }
+
+  /**
+   * 清空pending invoices缓存
+   * @returns 清空结果
+   */
+  @Post('/cache/clear-pending')
+  @HttpCode(HttpStatus.OK)
+  async clearPendingInvoicesCache() {
+    this.logger.log('Clearing pending invoices cache');
+    return this.authorizationCacheService.clearPendingInvoicesCache();
+  }
+
+  /**
+   * 获取所有pending invoices
+   * @returns 所有pending invoices
+   */
+  @Get('/cache/pending-invoices')
+  @HttpCode(HttpStatus.OK)
+  async getAllPendingInvoices(): Promise<PendingInvoiceData[]> {
+    this.logger.log('Getting all pending invoices from cache');
+    return this.authorizationCacheService.getAllPendingInvoices();
   }
 }

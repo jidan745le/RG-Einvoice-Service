@@ -10,6 +10,7 @@ import { EpicorTenantConfig } from '../../epicor/epicor.service';
 import { AuthorizationCacheService } from '../authorization-cache.service';
 import { v4 as uuidv4 } from 'uuid';
 import { ELIEInvoiceResetOptions, ELIEInvoiceResetResult, EpicorInvoiceHeader } from '../../epicor/interfaces/epicor.interface';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class InvoiceOperationService {
@@ -20,6 +21,7 @@ export class InvoiceOperationService {
         private readonly invoiceRepository: Repository<Invoice>,
         @InjectRepository(InvoiceDetail)
         private readonly invoiceDetailRepository: Repository<InvoiceDetail>,
+        private readonly configService: ConfigService,
         private readonly baiwangService: BaiwangService,
         private readonly epicorService: EpicorService,
         private readonly tenantConfigService: TenantConfigService,
@@ -109,9 +111,12 @@ export class InvoiceOperationService {
                 company
             );
 
+
             // 2. 直接从Epicor API获取发票实时数据
             this.logger.log(`Fetching real-time invoice data from Epicor for invoice ${id}`);
             const epicorInvoiceData = await this.epicorService.getInvoiceById(serverSettings, id);
+            this.logger.log(`Epicor invoice data: ${JSON.stringify(epicorInvoiceData)}`);
+
 
             if (!epicorInvoiceData) {
                 throw new Error(`Invoice with ID ${id} not found in Epicor`);
@@ -150,22 +155,25 @@ export class InvoiceOperationService {
 
             // Create Baiwang request
             const baiwangRequest = {
-                buyerTelephone: '',
-                priceTaxMark: '0',
-                callBackUrl: 'https://einvoice-test.rg-experience.com/api/invoice/callback',
+                // buyerTelephone: '',
+                priceTaxMark: '1',//单价含税标志:0-不含税,1-含税
+                callBackUrl: this.configService.get<string>('BAIWANG_CALLBACK_URL', 'https://einvoice-test.rg-experience.com/api/invoice/callback'),
                 invoiceDetailList,
-                sellerAddress: companyInfo.address || 'Environment issue immediately',
-                buyerAddress: 'Test address',
-                buyerBankName: 'Test bank name',
+                sellerAddress: companyInfo.address,
+                buyerAddress: epicorInvoiceData.DisplayBillAddr || '',
+                // buyerBankName: 'Test bank name',
                 invoiceType: '1',
-                taxNo: companyInfo.taxNo || '338888888888SMB',
+                taxNo: companyInfo.taxNo,
                 orderDateTime: new Date().toISOString().split('T')[0] + ' 10:00:00',
                 orderNo,
-                buyerName: epicorInvoiceData.CustomerName || 'Test Company',
-                invoiceTypeCode: '02',
-                sellerBankName: companyInfo.bankName || 'Test Bank',
-                remarks: epicorInvoiceData.InvoiceComment || 'Invoice',
+                buyerName: epicorInvoiceData.CustomerName,
+                // 发票种类编码(默认026):01-数电发票(增值税专用发票),02-数电发票(普通发票),03-数电发票(机动车销售统一发票),04-数电发票(二手车销售统一发票),85-数电纸质发票(增值税专用发票),86-数电纸质发票(普通发票),87-数电纸质发票(机动车销售统一发票),88-数电纸质发票(二手车销售统一发票),004-增值税专用发票,005-机动车销售统一发票,006-二手车销售统一发票,007-增值税普通发票,025-增值税普通发票(卷式),026-增值税电子普通发票,028-增值税电子专用发票
+                invoiceTypeCode: epicorInvoiceData.CNTaxInvoiceType == 1 ? '02' : (epicorInvoiceData.CNTaxInvoiceType == 0 ? '01' : "02"),
+                sellerBankName: companyInfo.bankName,
+                // remarks: epicorInvoiceData.InvoiceComment,
             };
+
+            this.logger.log(`Baiwang request: ${JSON.stringify(baiwangRequest)}`);
 
             // 4. Submit to Baiwang
             this.logger.log(`Submitting invoice to Baiwang with orderNo: ${orderNo}`);
@@ -371,25 +379,28 @@ export class InvoiceOperationService {
                 this.logger.warn(`No authorization provided for merged invoices ${erpInvoiceIds.join(', ')}, callback processing may fail`);
             }
 
+            // 发票种类编码(默认026):01-数电发票(增值税专用发票),02-数电发票(普通发票),03-数电发票(机动车销售统一发票),04-数电发票(二手车销售统一发票),85-数电纸质发票(增值税专用发票),86-数电纸质发票(普通发票),87-数电纸质发票(机动车销售统一发票),88-数电纸质发票(二手车销售统一发票),004-增值税专用发票,005-机动车销售统一发票,006-二手车销售统一发票,007-增值税普通发票,025-增值税普通发票(卷式),026-增值税电子普通发票,028-增值税电子专用发票
+
             // 创建百望请求
             const baiwangRequest = {
-                buyerTelephone: '',
-                priceTaxMark: '0',
-                callBackUrl: 'https://einvoice-test.rg-experience.com/api/invoice/callback',
+                // buyerTelephone: '',
+                priceTaxMark: '1',
+                callBackUrl: this.configService.get<string>('BAIWANG_CALLBACK_URL', 'https://einvoice-test.rg-experience.com/api/invoice/callback'),
                 invoiceDetailList: mergedItems,
-                sellerAddress: companyInfo.address || 'Environment issue immediately',
-                buyerAddress: 'Test address',
-                buyerBankName: 'Test bank name',
+                sellerAddress: companyInfo.address,
+                buyerAddress: validInvoices[0].DisplayBillAddr,
+                // buyerBankName: 'Test bank name',
                 invoiceType: '1',
-                taxNo: companyInfo.taxNo || '338888888888SMB',
+                taxNo: companyInfo.taxNo,
                 orderDateTime: new Date().toISOString().split('T')[0] + ' 10:00:00',
                 orderNo,
-                buyerName: firstCustomer || 'Test Company',
-                invoiceTypeCode: '02',
-                sellerBankName: companyInfo.bankName || 'Test Bank',
-                remarks: `Merged invoice for ${erpInvoiceIds.join(', ')}`,
+                buyerName: firstCustomer,
+                invoiceTypeCode: validInvoices[0].CNTaxInvoiceType == 1 ? '02' : (validInvoices[0].CNTaxInvoiceType == 0 ? '01' : "02"),
+                sellerBankName: companyInfo.bankName,
+                // remarks: `Merged invoice for ${erpInvoiceIds.join(', ')}`,
             };
 
+            this.logger.log(`Baiwang request: ${JSON.stringify(baiwangRequest)}`);
             // 提交到百望
             this.logger.log(`Submitting merged invoices to Baiwang with orderNo: ${orderNo}`);
             const result = await this.baiwangService.submitInvoice(baiwangRequest);

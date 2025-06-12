@@ -2,6 +2,8 @@ import { Injectable, Logger, UnauthorizedException, HttpException, HttpStatus } 
 import { HttpService } from '@nestjs/axios';
 import { ConfigService } from '@nestjs/config';
 import { lastValueFrom } from 'rxjs';
+
+const isDev = process.env.NODE_ENV === 'development';
 @Injectable()
 export class AuthService {
     private readonly logger = new Logger(AuthService.name);
@@ -13,10 +15,7 @@ export class AuthService {
 
     async verifyToken(token: string): Promise<any> {
         try {
-            const customerPortalUrl = this.configService.get<string>(
-                'CUSTOMER_PORTAL_URL',
-                'http://localhost:3000'
-            );
+            const customerPortalUrl = isDev ? 'http://127.0.0.1:3000' : this.configService.get<string>('CUSTOMER_PORTAL_URL');
 
             const response = await lastValueFrom(
                 this.httpService.get(`${customerPortalUrl}/verify-auth`, {

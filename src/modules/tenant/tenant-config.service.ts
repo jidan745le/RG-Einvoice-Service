@@ -6,6 +6,8 @@ import { ConfigService } from '@nestjs/config';
 import { lastValueFrom } from 'rxjs';
 import { CustomerHubRpcService } from './customer-hub-rpc.service';
 
+const isDev = process.env.NODE_ENV === 'development';
+
 @Injectable()
 export class TenantConfigService {
     private readonly logger = new Logger(TenantConfigService.name);
@@ -30,10 +32,7 @@ export class TenantConfigService {
     async getAppConfig(tenantId: string, appCode: string = 'einvoice', authorization?: string): Promise<any> {
         this.logger.log(`Getting app config for tenant: ${tenantId}, app: ${appCode}`);
         try {
-            const customerPortalUrl = this.configService.get<string>(
-                'CUSTOMER_PORTAL_URL',
-                'http://127.0.0.1:3000'
-            );
+            const customerPortalUrl = isDev ? 'http://127.0.0.1:3000' : this.configService.get<string>('CUSTOMER_PORTAL_URL');
 
             // 检查是否提供了认证信息
             if (!authorization) {

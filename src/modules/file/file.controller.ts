@@ -22,6 +22,8 @@ import { lastValueFrom } from 'rxjs';
 import * as FormData from 'form-data';
 import { Public } from '../auth/decorators/public.decorator';
 
+const isDev = process.env.NODE_ENV === 'development';
+
 interface MulterFile {
     fieldname: string;
     originalname: string;
@@ -125,10 +127,7 @@ export class FileController {
         @Req() request: RequestWithUser,
     ) {
         try {
-            const customerPortalUrl = this.configService.get<string>(
-                'CUSTOMER_PORTAL_URL',
-                'http://localhost:3000'
-            );
+            const customerPortalUrl = isDev ? 'http://127.0.0.1:3000' : this.configService.get<string>('CUSTOMER_PORTAL_URL');
 
             // Directly pipe the file from customer-hub to the response
             const fileResponse = await lastValueFrom(

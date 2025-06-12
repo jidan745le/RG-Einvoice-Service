@@ -19,6 +19,8 @@ import { AuthorizationCacheService } from './authorization-cache.service';
 import { InvoiceQueryService } from './services/invoice-query.service';
 import { InvoiceOperationService } from './services/invoice-operation.service';
 
+const isDev = process.env.NODE_ENV === 'development';
+
 @Injectable()
 export class InvoiceService {
   private readonly logger = new Logger(InvoiceService.name);
@@ -1610,10 +1612,7 @@ export class InvoiceService {
     this.logger.log(`Getting config for app: ${appCode} with mode: ${mode} for tenant: ${tenantId}`);
     try {
       // Get the customer portal URL from the configuration service
-      const customerPortalUrl = this.configService.get<string>(
-        'CUSTOMER_PORTAL_URL',
-        'http://127.0.0.1:3000'
-      );
+      const customerPortalUrl = isDev ? 'http://127.0.0.1:3000' : this.configService.get<string>('CUSTOMER_PORTAL_URL');
 
       if (!authorization) {
         throw new Error('No authorization header provided');
@@ -1678,10 +1677,7 @@ export class InvoiceService {
     this.logger.log(`Updating config for app: ${appCode} for tenant: ${tenantId}`);
     try {
       // Get the customer portal URL from the configuration service
-      const customerPortalUrl = this.configService.get<string>(
-        'CUSTOMER_PORTAL_URL',
-        'http://127.0.0.1:3000'
-      );
+      const customerPortalUrl = isDev ? 'http://127.0.0.1:3000' : this.configService.get<string>('CUSTOMER_PORTAL_URL');
 
       if (!authorization) {
         throw new Error('No authorization header provided');
